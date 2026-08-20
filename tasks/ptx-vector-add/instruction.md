@@ -2,6 +2,10 @@
 
 Create the file `/app/kernel.ptx` containing NVIDIA PTX assembly.
 
+Write or edit the PTX directly. Do not generate the submission by compiling
+CUDA C++, Triton, Python, or another higher-level language. `ptxas` may be used
+to validate PTX syntax, but `nvcc` and NVRTC are not available.
+
 The file must define a visible kernel entry named `vector_add` with this logical
 signature:
 

@@ -39,7 +39,7 @@ ptx-bench-release-vN（未来创建）
 └── 用于正式模型对比和论文结果
 ```
 
-当前 Harbor manifest 是 [`../tasks/dataset.toml`](../tasks/dataset.toml)，名称为
+当前 Harbor manifest 是 [`../../tasks/dataset.toml`](../../tasks/dataset.toml)，名称为
 `ptx-bench/ptx-bench-dev`。它不是最终 leaderboard 数据集。
 
 该 manifest 由本地 Harbor 0.21.0 创建并同步；远端个人补丁版 Harbor 0.13.2 已完成
@@ -156,7 +156,10 @@ direct-PTX
     限制高层编译器，评测模型直接编写/修改 PTX 的能力
 ```
 
-当前共用 SIF 属于第一种。它适合先稳定任务，但不能据此宣称模型完全没有借助编译器。
+最初的共用 SIF 属于第一种，用于稳定任务。当前任务已经改为第二种：Reference 在
+出题阶段预编译并固定，Agent/Verifier 共用的 direct-PTX SIF 移除了 `nvcc`、NVRTC
+和 CUDA 高层编译前端，只保留 `ptxas` 等 PTX 级工具。旧的 tool-assisted 运行结果
+只能保留为基础设施校准，不能混入 direct-PTX 排行榜。
 
 ## 9. 数据集构建顺序
 
@@ -170,7 +173,7 @@ direct-PTX
 
 ## 10. 设计依据
 
-- 卓明录音：[`source/录音.txt`](source/录音.txt)
+- 卓明录音：[`../source/录音.txt`](../source/录音.txt)
 - ΦBench：<https://faibench.org/>，将任务分为单文件 KFC、多文件 LHI 和系统级 E2EO
 - Harbor：<https://github.com/harbor-framework/harbor>
 - INT21 RMSNorm-B200：<https://github.com/Int21-AI/RMSNorm-B200>

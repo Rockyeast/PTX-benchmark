@@ -120,3 +120,56 @@ falls back to SIGTERM and SIGKILL if needed.
 Both rows in this table use the same generic SIF, so this is the primary
 before/after comparison. A separate run with the Codex-specific SIF also
 returned reward `1.0` in 5.141 seconds.
+
+## Direct-PTX images
+
+The original two images above are retained as historical `tool-assisted`
+artifacts. They include `nvcc` and must not be used for the direct-PTX
+leaderboard.
+
+The restricted definitions are:
+
+- `ptx-bench-direct-cuda13.2.def`: agent-neutral direct-PTX image;
+- `ptx-bench-direct-codex0.148.def`: direct-PTX image with pinned Codex CLI.
+
+They derive from the already validated SIFs, remove `nvcc`, NVRTC, `cudafe++`,
+and NVVM, and retain `ptxas` for direct PTX syntax/resource checks. Task
+References are compiled once during task authoring and committed as hidden,
+digest-pinned `.ptx` files; the verifier no longer needs a CUDA C++ compiler.
+
+Build the Codex image on Catalyst with:
+
+```bash
+APPTAINER_CACHEDIR=/tmp/zhuominc-ptx-apptainer-cache \
+APPTAINER_TMPDIR=/tmp/zhuominc-ptx-apptainer-tmp \
+timeout 7200 \
+apptainer build --fakeroot \
+  /home/zhuominc/rockyeast-work/containers/ptx-bench-direct-cuda13.2.1-codex0.148-ubuntu24.04-v1.sif \
+  /home/zhuominc/rockyeast-work/PTX-benchmark/images/ptx-bench-direct-codex0.148.def
+```
+
+Because Codex still requires network access to call the model API, removing
+local compiler binaries is not a hermetic proof that no compiler was
+downloaded. Direct-PTX release runs must also retain and audit the Agent
+trajectory, and should add egress allowlisting when the infrastructure supports
+it.
+
+The Codex direct-PTX image was built and tested on `catalyst-b200` on
+2026-08-20:
+
+```text
+Path:   /home/zhuominc/rockyeast-work/containers/ptx-bench-direct-cuda13.2.1-codex0.148-ubuntu24.04-v1.sif
+Size:   3,664,666,624 bytes
+SHA256: 2b38a14d218aa78cd14eba8e5b66b991cf28296f6ae697b1473c64270c41ebe9
+```
+
+Validation completed:
+
+- image `%test` confirmed `nvcc` and NVRTC are absent;
+- `ptxas` 13.2.78, Codex CLI 0.148.0, and Python 3.12.3 remain available;
+- vector-add Oracle passed with correctness `1.0` and reward `0.991443`;
+- RMSNorm Oracle passed with correctness `1.0` and reward `1.0`;
+- a real `gpt-5.6-sol` vector-add trial passed with correctness and reward
+  `1.0` (`speedup_vs_reference=1.007243`); its trajectory directly created PTX
+  and used only `ptxas`/`cuobjdump`
+  for validation, with no high-level compiler or compiler download.

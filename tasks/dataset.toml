@@ -11,9 +11,9 @@ keywords = [ "ptx", "cuda", "b200", "llm-infrastructure", "development",]
 
 [[tasks]]
 name = "ptx-bench/ptx-rmsnorm-forward-bf16-n4096"
-digest = "sha256:5fe2638b37a3dc70a6568798b847450f06a4dd0aef475d9847a8951967efd498"
+digest = "sha256:16fef24303252528983b1c32523b135bb43580d6b19e2786069224d47bc3a53f"
 
 [[tasks]]
 name = "ptx-bench/ptx-vector-add"
-digest = "sha256:928be5188f5c40d36639f0e8536f96ab24c22ba0418ed287c9732a86b7be76d1"
+digest = "sha256:eecf182c12996ad29a9eaa7e5c54164158db1b9527346037788016501793eee9"
 

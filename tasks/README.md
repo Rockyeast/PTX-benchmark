@@ -19,8 +19,8 @@ useful infrastructure examples, but they are deliberately excluded from
 
 The dataset architecture and candidate backlog are documented in:
 
-- [`../docs/dataset-design.md`](../docs/dataset-design.md)
-- [`../docs/task-catalog.md`](../docs/task-catalog.md)
+- [`../docs/dataset/dataset-design.md`](../docs/dataset/dataset-design.md)
+- [`../docs/dataset/task-catalog.md`](../docs/dataset/task-catalog.md)
 
 After a local task changes, update its pinned content digest with:
 

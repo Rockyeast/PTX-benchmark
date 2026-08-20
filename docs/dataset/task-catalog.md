@@ -69,4 +69,3 @@ attention。P2 是下一道最合适的 task；它能验证“从现有 task 模
 
 只推进 P2 RoPE 的“来源审阅 + 规格文档”，暂不 scaffold。RMSNorm 保持 feasibility
 状态，等五道 pilot 的共同结构清楚后，再统一补齐负例和真实 Agent 校准。
-

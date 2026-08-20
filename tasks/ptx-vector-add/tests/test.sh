@@ -8,7 +8,7 @@ printf '{"reward":0,"correctness":0,"performance":0,"speedup_vs_reference":0}\n'
 
 if python3 /tests/verify_and_benchmark.py \
     --candidate /app/kernel.ptx \
-    --reference-source /tests/reference.cu \
+    --reference /tests/reference.ptx \
     --log /logs/verifier/metrics.json \
     --reward /logs/verifier/reward.json; then
     exit 0

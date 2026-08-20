@@ -1,0 +1,28 @@
+Bootstrap: localimage
+From: /home/zhuominc/rockyeast-work/containers/ptx-bench-cuda13.2.1-codex0.148-ubuntu24.04-v1.sif
+
+%labels
+    org.ptx-bench.setting "direct-ptx"
+    org.ptx-bench.direct.image.version "cuda13.2.1-codex0.148.0-v1"
+    org.ptx-bench.direct.removed "nvcc,nvrtc,cudafe,nvvm"
+
+%post
+    set -eux
+
+    rm -f \
+        /usr/local/cuda/bin/__nvcc_device_query \
+        /usr/local/cuda/bin/cudafe++ \
+        /usr/local/cuda/bin/nvcc \
+        /usr/local/cuda/bin/nvcc.profile \
+        /usr/local/cuda/targets/x86_64-linux/include/nvrtc.h
+    rm -f /usr/local/cuda/targets/x86_64-linux/lib/libnvrtc*
+    rm -rf /usr/local/cuda/nvvm
+
+%test
+    test ! -e /usr/local/cuda/bin/nvcc
+    test ! -e /usr/local/cuda/targets/x86_64-linux/include/nvrtc.h
+    ! find -L /usr/local/cuda -iname '*nvrtc*' -print -quit | grep -q .
+    ptxas --version
+    test "$(node --version)" = "v22.23.2"
+    codex --version | grep "0.148.0"
+    python3 --version

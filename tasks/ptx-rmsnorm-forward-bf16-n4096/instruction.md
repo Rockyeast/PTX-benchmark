@@ -3,6 +3,10 @@
 Create `/app/kernel.ptx` containing NVIDIA PTX assembly. It must define a
 visible entry named `rmsnorm_fwd_bf16_n4096` with this logical signature:
 
+Write or edit the PTX directly. Do not generate the submission by compiling
+CUDA C++, Triton, Python, or another higher-level language. `ptxas` may be used
+to validate PTX syntax, but `nvcc` and NVRTC are not available.
+
 ```text
 rmsnorm_fwd_bf16_n4096(
     const bfloat16* x,

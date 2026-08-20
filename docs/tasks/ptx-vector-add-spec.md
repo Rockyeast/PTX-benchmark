@@ -120,8 +120,8 @@ Verifier 在同一个 CUDA context、同一张 GPU、同一套输入和同一启
 加载：
 
 - Candidate：`/app/kernel.ptx`；
-- Reference：隐藏的 `tests/reference.cu`，由 NVIDIA `nvcc` 在 verifier 启动时
-  编译为临时 PTX。
+- Reference：隐藏且 digest 固定的 `tests/reference.ptx`；其可审计源码保存在
+  `tests/reference.cu`，只在出题阶段由 NVIDIA `nvcc` 编译一次。
 
 Reference 改编自 NVIDIA CUDA Samples 的 `vectorAdd` 基本实现，来源与许可证记录在
 `tests/REFERENCE.md`。它只提供同卡性能基线，不决定正确性；Candidate 与
@@ -189,6 +189,7 @@ tasks/ptx-vector-add/
     ├── test.sh
     ├── verify_and_benchmark.py
     ├── reference.cu
+    ├── reference.ptx
     └── REFERENCE.md
 ```
 
@@ -196,7 +197,8 @@ tasks/ptx-vector-add/
 
 - `instruction.md`：只公开接口、输出路径和固定启动约定；
 - `solution/solve.sh`：Oracle Agent 提交的标准答案；
-- `tests/reference.cu`：Verifier 用 `nvcc` 编译的独立性能参考；
+- `tests/reference.cu`：预编译 Reference 的可审计源码；
+- `tests/reference.ptx`：Verifier 直接加载的固定性能参考；
 - `verify_and_benchmark.py`：正确性、canary、CUDA Event 计时和指标输出；
 - `test.sh`：运行 verifier，并保证任何异常最终产生合法的零分文件。
 
@@ -205,19 +207,14 @@ Verifier 不依赖 Agent 运行后的 Oracle 输出；两条路径都由 CPU 真
 
 ## 7. 工具与“直接写 PTX”的边界
 
-当前 Codex SIF 含 `ptxas`、`nvcc` 和 CUDA Toolkit。Agent 可以用 `ptxas` 检查
-PTX 语法，也可能先写 CUDA 再生成 PTX。因此 v0.1 只能证明：
+当前 direct-PTX SIF 保留 `ptxas` 做语法检查，但移除了 `nvcc`、NVRTC 和 CUDA
+高层编译前端。Verifier 直接加载预编译的 `tests/reference.ptx`，Oracle 也不在
+trial 内编译 CUDA。任务说明同时禁止通过 CUDA、Triton、Python 或其他高层语言
+生成提交。
 
-> Agent 能在工具开放的环境中交付满足接口的 PTX。
-
-它还不能证明 PTX 是模型直接手写的。正式论文若要声称“直接 PTX 能力”，必须在
-题集冻结前选择并记录一种策略：
-
-1. 构建受限 SIF，只保留 PTX 汇编/加载所需工具；或
-2. 明确允许编译器辅助，并把它作为独立 benchmark setting；或
-3. 审计 Agent trajectory，但不能把人工轨迹审计当作唯一自动评分机制。
-
-v0.1 推荐先采用工具开放 setting，把受限 setting 留到评测方法稳定后实现。
+这比旧的工具开放 setting 更接近“模型直接写 PTX”。但 Codex 调用模型 API 仍需
+网络，因此环境并非完全隔离；正式论文还应记录 trajectory 审计方法和网络策略，
+不能只凭最终文件扩展名证明生成过程。
 
 ## 8. 实现验收
 
@@ -236,7 +233,7 @@ v0.1 推荐先采用工具开放 setting，把受限 setting 留到评测方法�
 
 1. [x] 人工阅读并确认本规格；
 2. [x] scaffold `tasks/ptx-vector-add/`；
-3. [x] 实现 Oracle PTX、CPU correctness verifier 和 `nvcc` Reference；
+3. [x] 实现 Oracle PTX、CPU correctness verifier 和固定 PTX Reference；
 4. [x] 实现 CUDA Event 性能测量与多指标 reward；
 5. [x] 在 B200 跑 Oracle 正例和至少两个负例；
 6. [x] 在 B200 连续跑 Oracle 三次，检查时延波动；

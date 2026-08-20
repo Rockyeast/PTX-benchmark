@@ -6,7 +6,9 @@ for `N=4096` on NVIDIA B200.
 Current status: feasibility-validated on an NVIDIA B200. The first Harbor
 Oracle run passed six correctness cases and three performance shapes in 18
 seconds. The Oracle and hidden Reference are intentionally the same simple CUDA
-algorithm compiled to PTX, and produced raw speedup `1.000141864` as expected.
+algorithm, precompiled and pinned as PTX during task authoring. They produced
+raw speedup `1.000141864` as expected. The evaluated environment no longer
+contains `nvcc` or NVRTC.
 
 This result validates the raw PTX ABI, independent correctness checks, and
 timing pipeline. It does not establish model discrimination or parity with

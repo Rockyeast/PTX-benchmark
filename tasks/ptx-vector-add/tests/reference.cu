@@ -1,6 +1,6 @@
 // Performance reference adapted to PTX-Bench's ABI from NVIDIA CUDA Samples'
 // vectorAdd example. This source is hidden from the evaluated agent and is
-// compiled to PTX by nvcc before timing begins.
+// precompiled and pinned as reference.ptx during task authoring.
 
 extern "C" __global__ void vector_add(
     const float* a,

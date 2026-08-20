@@ -12,6 +12,24 @@
 - 远端 Harbor：0.13.2，个人隔离副本
   `/home/zhuominc/rockyeast-work/harbor-ptx`
 
+## Direct-PTX 迁移验证
+
+2026-08-20 又完成了一组受限环境验证。新 SIF
+`ptx-bench-direct-cuda13.2.1-codex0.148-ubuntu24.04-v1.sif` 移除了 `nvcc`、
+NVRTC、`cudafe++` 和 NVVM，保留 `ptxas`；Verifier 改为直接加载出题阶段
+预编译且固定 digest 的 `tests/reference.ptx`。
+
+| Trial | Agent | correctness | reward | 结果 |
+|---|---|---:|---:|---|
+| `ptx-vector-add-direct-oracle-final-image` | Oracle | 1 | 0.991443 | 通过 |
+| `ptx-rmsnorm-direct-oracle-final-image` | Oracle | 1 | 1.000000 | 通过 |
+| `ptx-vector-add-direct-codex-final-image` | `gpt-5.6-sol` | 1 | 1.000000 | 通过；raw speedup 1.007243 |
+
+真实 Agent trajectory 显示：它直接创建 `/app/kernel.ptx`，随后只调用
+`ptxas` 和 `cuobjdump` 检查，没有调用或下载 CUDA/Triton 等高层编译器。
+该结果验证了本次运行的 direct-PTX 路径；由于模型 API 仍需要网络，正式发布
+仍应保留 trajectory 审计，并在基础设施允许时增加 egress allowlist。
+
 ## Oracle 重复性
 
 | Trial | 物理 GPU | Task checksum | correctness | reward |

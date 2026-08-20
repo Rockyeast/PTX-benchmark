@@ -228,19 +228,24 @@ tasks/ptx-rmsnorm-forward-bf16-n4096/
 ├── environment/
 │   └── Dockerfile
 ├── solution/
-│   └── solve.sh
+│   ├── solve.sh
+│   ├── oracle.cu
+│   └── oracle.ptx
 └── tests/
     ├── test.sh
     ├── verify_and_benchmark.py
     ├── reference.cu
+    ├── reference.ptx
     └── REFERENCE.md
 ```
 
 其中：
 
 - `instruction.md`：Agent 可见的接口和提交要求；
-- `solution/solve.sh`：Oracle 创建标准 Candidate PTX；
-- `reference.cu`：隐藏、同 ABI 的性能参考，不提供给 Agent；
+- `solution/solve.sh`：复制预编译的 `oracle.ptx` 作为标准 Candidate；
+- `oracle.cu`：Oracle PTX 的可审计源码，不在 trial 内编译；
+- `reference.cu`：隐藏的性能 Reference 源码，不提供给 Agent；
+- `reference.ptx`：Verifier 直接加载的固定、同 ABI 性能参考；
 - `verify_and_benchmark.py`：独立真值、内存安全、计时和 reward；
 - `REFERENCE.md`：INT21 来源、commit、许可证和具体改编范围。
 

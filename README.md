@@ -14,8 +14,9 @@ PTX-benchmark/
 │   ├── 任务.md                  # 当前计划和验收标准
 │   ├── harbor-job-output.md    # Harbor jobs 输出目录结构和阅读方法
 │   ├── harbor-task-lifecycle.md # Task 从 instruction 到 reward 的运行链路
-│   ├── dataset-design.md       # 数据集分层、task 粒度、评分与 release gate
-│   ├── task-catalog.md         # 已有任务、五道 pilot 和候选池
+│   ├── dataset/                # 数据集级设计与题目目录
+│   │   ├── dataset-design.md   # 数据集分层、task 粒度、评分与 release gate
+│   │   └── task-catalog.md     # 已有任务、五道 pilot 和候选池
 │   ├── 新任务阅读清单.md         # 每个新 task 固定看什么、按什么顺序看
 │   ├── tasks/
 │   │   └── ptx-vector-add-spec.md # 第一题的接口、正确性、计时和评分规格
@@ -31,7 +32,7 @@ PTX-benchmark/
 │   ├── dataset.toml            # ptx-bench/ptx-bench-dev，固定 task digest
 │   ├── harbor-smoke/           # 最小文本任务
 │   ├── ptx-add-one/            # B200 PTX 正确性 smoke task
-│   ├── ptx-vector-add/         # CPU 真值门控 + nvcc 性能基线校准题
+│   ├── ptx-vector-add/         # CPU 真值门控 + 固定 PTX 性能基线校准题
 │   └── ptx-rmsnorm-forward-bf16-n4096/ # 第一件正式算子候选题
 ├── jobs/                       # Harbor 自动生成的运行结果
 └── .venv/                      # 本地 Python/Harbor 环境
@@ -51,8 +52,8 @@ PTX-benchmark/
 
 1. [`docs/source/录音.txt`](docs/source/%E5%BD%95%E9%9F%B3.txt)：了解项目来源和目标。
 2. [`docs/任务.md`](docs/%E4%BB%BB%E5%8A%A1.md)：查看任务进度与验收标准。
-3. [`docs/dataset-design.md`](docs/dataset-design.md)：先看整个数据集的分层、家族和 release gate。
-4. [`docs/task-catalog.md`](docs/task-catalog.md)：查看已有任务、五道 pilot 和候选池。
+3. [`docs/dataset/dataset-design.md`](docs/dataset/dataset-design.md)：先看整个数据集的分层、家族和 release gate。
+4. [`docs/dataset/task-catalog.md`](docs/dataset/task-catalog.md)：查看已有任务、五道 pilot 和候选池。
 5. [`tasks/harbor-smoke/`](tasks/harbor-smoke/)：查看最小 Harbor task。
 6. [`tasks/ptx-add-one/`](tasks/ptx-add-one/)：查看已跑通的 PTX 正确性链路。
 7. [`docs/tasks/ptx-vector-add-spec.md`](docs/tasks/ptx-vector-add-spec.md)：查看第一道性能校准题。
@@ -72,10 +73,11 @@ PTX-benchmark/
 - 远端 B200 上的 `ptx-add-one` Oracle、负例和真实 Codex 均已完成验证。
 - 通用 CUDA SIF、Codex 专用 SIF 和 Singularity GPU 自动分配补丁已经完成。
 - `ptx-vector-add` 已实现 Oracle、CPU 独立正确性门控、内存 canary、隐藏
-  `nvcc` reference、CUDA Event 计时和多指标 reward。B200 上 Oracle 三次 reward
+  固定 PTX reference、CUDA Event 计时和多指标 reward。B200 上 Oracle 三次 reward
   为 `0.990683 / 0.997697 / 0.987482`，慢速正确实现为 `0.267804`，缺失 entry
-  和越界写负例均为 `0`。真实 Codex Agent correctness 为 `1`，原始
-  `speedup_vs_reference=1.000609`，封顶 reward 为 `1`。
+  和越界写负例均为 `0`。迁移到移除 `nvcc`/NVRTC 的 direct-PTX SIF 后，真实
+  Codex Agent correctness 为 `1`，原始 `speedup_vs_reference=1.007243`，
+  封顶 reward 为 `1`；轨迹确认它直接写 PTX，只用 `ptxas`/`cuobjdump` 自检。
 - `ptx-rmsnorm-forward-bf16-n4096` 已完成 B200 feasibility Oracle 首跑：六个
   correctness case 和三个 performance shape 通过；它尚未完成 INT21 外部性能对照、
   负例和多 Agent 校准。

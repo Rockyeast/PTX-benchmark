@@ -8,12 +8,9 @@ import ctypes
 import json
 import math
 import random
-import shutil
 import statistics
 import struct
-import subprocess
 import sys
-import tempfile
 from array import array
 from pathlib import Path
 
@@ -388,33 +385,6 @@ def validate_function(
                 )
 
 
-def compile_reference(source: Path, destination: Path) -> dict[str, object]:
-    nvcc = shutil.which("nvcc")
-    if nvcc is None:
-        raise FileNotFoundError("nvcc is required to compile the hidden reference")
-    command = [
-        nvcc,
-        "--ptx",
-        "--optimize=3",
-        "--gpu-architecture=compute_100",
-        "--output-file",
-        str(destination),
-        str(source),
-    ]
-    completed = subprocess.run(command, text=True, capture_output=True, check=False)
-    if completed.returncode != 0:
-        raise RuntimeError(
-            "reference compilation failed:\n" + completed.stdout + completed.stderr
-        )
-    version = subprocess.run(
-        [nvcc, "--version"], text=True, capture_output=True, check=False
-    )
-    return {
-        "command": command,
-        "nvcc_version": (version.stdout + version.stderr).strip(),
-    }
-
-
 def validate_constant_rows(
     cuda: CudaDriver,
     function: ctypes.c_void_p,
@@ -547,7 +517,7 @@ def benchmark(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate", type=Path, required=True)
-    parser.add_argument("--reference-source", type=Path, required=True)
+    parser.add_argument("--reference", type=Path, required=True)
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--reward", type=Path, required=True)
     parser.add_argument("--correctness-only", action="store_true")
@@ -564,63 +534,60 @@ def run(args: argparse.Namespace) -> int:
         raise FileNotFoundError(f"missing PTX output: {args.candidate}")
     if args.candidate.stat().st_size > MAX_PTX_BYTES:
         raise ValueError(f"candidate PTX exceeds {MAX_PTX_BYTES} bytes")
-    if not args.reference_source.is_file():
-        raise FileNotFoundError(f"missing reference source: {args.reference_source}")
+    if not args.reference.is_file():
+        raise FileNotFoundError(f"missing precompiled reference PTX: {args.reference}")
 
-    with tempfile.TemporaryDirectory(prefix="ptx-rmsnorm-") as temp_dir:
-        reference_ptx = Path(temp_dir) / "reference.ptx"
-        compiler = compile_reference(args.reference_source, reference_ptx)
-        cuda = CudaDriver()
-        candidate_module = ctypes.c_void_p()
-        reference_module = ctypes.c_void_p()
-        try:
-            candidate_module, candidate = cuda.load_function(
-                args.candidate, b"rmsnorm_fwd_bf16_n4096"
-            )
-            reference_module, reference = cuda.load_function(
-                reference_ptx, b"rmsnorm_fwd_bf16_n4096"
-            )
-            validate_function(cuda, candidate, "candidate")
-            validate_function(cuda, reference, "reference")
-            if args.correctness_only:
-                performance_rows: list[dict[str, object]] = []
-                speedup = 1.0
-            else:
-                performance_rows, speedup = benchmark(cuda, candidate, reference)
-            performance = max(0.0, min(1.0, speedup))
-            metrics = {
-                "status": "passed",
-                "validation_level": "feasibility",
-                "gpu": cuda.device_name(),
-                "candidate_path": str(args.candidate),
-                "candidate_bytes": args.candidate.stat().st_size,
-                "correctness_cases": [
-                    {"M": rows, "N": N, "eps": eps} for rows, eps in CORRECTNESS_CASES
-                ],
-                "compiler": compiler,
-                "performance_rows": performance_rows,
-                "speedup_vs_reference": speedup,
-            }
-            rewards = {
-                "reward": performance,
-                "correctness": 1.0,
-                "performance": performance,
-                "speedup_vs_reference": speedup,
-            }
-            write_json(args.log, metrics)
-            write_json(args.reward, rewards)
-            print(
-                "PTX_RMSNORM_FEASIBILITY_OK: "
-                f"{len(CORRECTNESS_CASES)} correctness cases; "
-                f"speedup_vs_reference={speedup:.6f}; reward={performance:.6f}"
-            )
-            return 0
-        finally:
-            if reference_module.value:
-                cuda.lib.cuModuleUnload(reference_module)
-            if candidate_module.value:
-                cuda.lib.cuModuleUnload(candidate_module)
-            cuda.close()
+    cuda = CudaDriver()
+    candidate_module = ctypes.c_void_p()
+    reference_module = ctypes.c_void_p()
+    try:
+        candidate_module, candidate = cuda.load_function(
+            args.candidate, b"rmsnorm_fwd_bf16_n4096"
+        )
+        reference_module, reference = cuda.load_function(
+            args.reference, b"rmsnorm_fwd_bf16_n4096"
+        )
+        validate_function(cuda, candidate, "candidate")
+        validate_function(cuda, reference, "reference")
+        if args.correctness_only:
+            performance_rows: list[dict[str, object]] = []
+            speedup = 1.0
+        else:
+            performance_rows, speedup = benchmark(cuda, candidate, reference)
+        performance = max(0.0, min(1.0, speedup))
+        metrics = {
+            "status": "passed",
+            "validation_level": "feasibility",
+            "gpu": cuda.device_name(),
+            "candidate_path": str(args.candidate),
+            "candidate_bytes": args.candidate.stat().st_size,
+            "correctness_cases": [
+                {"M": rows, "N": N, "eps": eps} for rows, eps in CORRECTNESS_CASES
+            ],
+            "reference_path": str(args.reference),
+            "performance_rows": performance_rows,
+            "speedup_vs_reference": speedup,
+        }
+        rewards = {
+            "reward": performance,
+            "correctness": 1.0,
+            "performance": performance,
+            "speedup_vs_reference": speedup,
+        }
+        write_json(args.log, metrics)
+        write_json(args.reward, rewards)
+        print(
+            "PTX_RMSNORM_FEASIBILITY_OK: "
+            f"{len(CORRECTNESS_CASES)} correctness cases; "
+            f"speedup_vs_reference={speedup:.6f}; reward={performance:.6f}"
+        )
+        return 0
+    finally:
+        if reference_module.value:
+            cuda.lib.cuModuleUnload(reference_module)
+        if candidate_module.value:
+            cuda.lib.cuModuleUnload(candidate_module)
+        cuda.close()
 
 
 def main() -> int:
