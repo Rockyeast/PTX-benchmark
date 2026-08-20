@@ -1,0 +1,32 @@
+schema_version = "1.4"
+artifacts = []
+
+[task]
+name = "ptx-bench/ptx-rmsnorm-forward-bf16-n4096"
+version = "1.0.0"
+description = "Implement and benchmark a BF16 RMSNorm forward PTX kernel specialized for N=4096 on NVIDIA B200."
+authors = []
+keywords = ["ptx", "cuda", "b200", "rmsnorm", "bf16", "performance"]
+
+[metadata]
+
+[verifier]
+timeout_sec = 180.0
+collect = []
+
+[verifier.env]
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 900.0
+os = "linux"
+gpus = 1
+gpu_types = ["B200"]
+mcp_servers = []
+
+[environment.env]
+
+[solution.env]

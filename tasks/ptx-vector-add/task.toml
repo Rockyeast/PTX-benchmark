@@ -1,0 +1,32 @@
+schema_version = "1.4"
+artifacts = []
+
+[task]
+name = "ptx-bench/ptx-vector-add"
+version = "1.0.0"
+description = "Implement and benchmark a PTX float32 vector-add kernel on NVIDIA B200."
+authors = []
+keywords = ["ptx", "cuda", "b200", "vector-add", "performance", "calibration"]
+
+[metadata]
+
+[verifier]
+timeout_sec = 120.0
+collect = []
+
+[verifier.env]
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 900.0
+os = "linux"
+gpus = 1
+gpu_types = ["B200"]
+mcp_servers = []
+
+[environment.env]
+
+[solution.env]

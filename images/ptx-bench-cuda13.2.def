@@ -1,0 +1,49 @@
+Bootstrap: docker
+From: nvidia/cuda:13.2.1-devel-ubuntu24.04
+
+%labels
+    org.opencontainers.image.title "PTX-Bench CUDA environment"
+    org.opencontainers.image.description "Reusable CUDA 13.2 PTX task environment for Harbor on Catalyst"
+    org.ptx-bench.image.version "13.2.1-ubuntu24.04-v1"
+
+%environment
+    export PATH="/usr/local/cuda/bin:${PATH}"
+    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+    export DEBIAN_FRONTEND=noninteractive
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        asciinema \
+        build-essential \
+        ca-certificates \
+        curl \
+        git \
+        python3 \
+        python3-pip \
+        python3-venv \
+        ripgrep \
+        tmux
+
+    python3 -m venv /opt/harbor-server
+    /opt/harbor-server/bin/python3 -m pip install --no-cache-dir \
+        "fastapi==0.128.0" \
+        "uvicorn==0.40.0"
+
+    mkdir -p /app /tests /logs/verifier
+    chmod 0777 /app /tests /logs /logs/verifier
+
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* /root/.cache/pip
+
+%test
+    python3 --version
+    /opt/harbor-server/bin/python3 -c "import fastapi, uvicorn"
+    nvcc --version
+    ptxas --version
+    command -v rg
+    command -v tmux
+    command -v asciinema

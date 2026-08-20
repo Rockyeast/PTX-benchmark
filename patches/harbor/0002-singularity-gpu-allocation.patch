@@ -1,0 +1,500 @@
+diff --git a/src/harbor/environments/singularity/README.md b/src/harbor/environments/singularity/README.md
+index 318c473..28c9baa 100644
+--- a/src/harbor/environments/singularity/README.md
++++ b/src/harbor/environments/singularity/README.md
+@@ -51,11 +51,16 @@ docker_image = "/path/to/image.sif"    # used directly
+ | `singularity_force_pull` | `false` | Force re-conversion even if cached |
+ | `singularity_no_mount` | `home,tmp,bind-paths` | Comma-separated mount types to suppress |
+ | `singularity_nv` | `false` | Pass `--nv` to Singularity and enable Harbor GPU capability checks |
++| `singularity_gpu_ids` | all host GPUs | Comma-separated physical GPU indices eligible for automatic allocation |
++| `singularity_gpu_memory_threshold_mb` | `256` | Reject a candidate whose current `memory.used` exceeds this value |
++| `singularity_gpu_context_probe` | `true` | Require a minimal CUDA Driver context to succeed before allocation |
++| `singularity_gpu_lock_dir` | `/tmp` | Directory containing per-GPU advisory lock files |
+ 
+ ## Key features
+ 
+ - **File-locked image caching** — Safe for concurrent tasks converting the same image.
+ - **Memory watchdog** — Monitors process tree memory (PSS) with adaptive polling and kills the container at 95% of the configured limit.
+ - **Port collision retry** — Reserves ports and retries on collision since Singularity shares the host network namespace.
++- **Per-trial GPU leases** — Concurrent trials reserve distinct idle physical GPUs, verify CUDA context creation, and expose only their reservation through `CUDA_VISIBLE_DEVICES`.
+ - **Bootstrap isolation** — Server dependencies are installed in `/opt/harbor-server` venv, separate from the task's Python environment.
+ - **Overlay compatibility** — Handles dpkg cross-device rename issues on Singularity's writable-tmpfs overlay.
+diff --git a/src/harbor/environments/singularity/gpu_allocator.py b/src/harbor/environments/singularity/gpu_allocator.py
+new file mode 100644
+index 0000000..40fc812
+--- /dev/null
++++ b/src/harbor/environments/singularity/gpu_allocator.py
+@@ -0,0 +1,279 @@
++"""Best-effort local GPU leasing for direct-host Singularity trials."""
++
++import asyncio
++import logging
++import os
++import subprocess
++import sys
++from dataclasses import dataclass
++from pathlib import Path
++from typing import IO
++
++if sys.platform != "win32":
++    import fcntl
++
++
++_CUDA_CONTEXT_PROBE = r"""
++import ctypes
++import sys
++
++cuda = ctypes.CDLL("libcuda.so.1")
++device_count = ctypes.c_int()
++device = ctypes.c_int()
++context = ctypes.c_void_p()
++
++checks = [
++    ("cuInit", cuda.cuInit(0)),
++    ("cuDeviceGetCount", cuda.cuDeviceGetCount(ctypes.byref(device_count))),
++]
++if checks[-1][1] == 0 and device_count.value < 1:
++    print("no CUDA devices visible", file=sys.stderr)
++    sys.exit(1)
++if all(result == 0 for _, result in checks):
++    checks.append(("cuDeviceGet", cuda.cuDeviceGet(ctypes.byref(device), 0)))
++if all(result == 0 for _, result in checks):
++    checks.append(
++        ("cuCtxCreate", cuda.cuCtxCreate_v2(ctypes.byref(context), 0, device))
++    )
++
++for operation, result in checks:
++    if result != 0:
++        print(f"{operation} failed with CUDA error {result}", file=sys.stderr)
++        sys.exit(1)
++
++if context.value:
++    cuda.cuCtxDestroy_v2(context)
++"""
++
++
++class GpuAllocationError(RuntimeError):
++    """Raised when a Singularity trial cannot reserve enough usable GPUs."""
++
++
++@dataclass
++class GpuLease:
++    """Advisory GPU locks held for one environment's complete lifetime."""
++
++    gpu_ids: tuple[int, ...]
++    _lock_files: list[IO[str]]
++
++    @property
++    def cuda_visible_devices(self) -> str:
++        return ",".join(str(gpu_id) for gpu_id in self.gpu_ids)
++
++    def release(self) -> None:
++        for lock_file in self._lock_files:
++            try:
++                if sys.platform != "win32":
++                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
++            finally:
++                lock_file.close()
++        self._lock_files.clear()
++
++
++class GpuAllocator:
++    """Reserve idle GPUs using host inspection plus advisory file locks.
++
++    The lock prevents concurrent Harbor processes on the same host from choosing
++    the same GPU. External jobs do not participate in the lock, so live memory,
++    process, and CUDA-context checks are still required before each reservation.
++    """
++
++    def __init__(
++        self,
++        *,
++        allowed_gpu_ids: str | list[int] | tuple[int, ...] | None = None,
++        memory_threshold_mb: int = 256,
++        probe_context: bool = True,
++        lock_dir: Path | str = "/tmp",
++        logger: logging.Logger | None = None,
++    ) -> None:
++        if memory_threshold_mb < 0:
++            raise ValueError("singularity_gpu_memory_threshold_mb must be >= 0")
++        self._allowed_gpu_ids = self.normalize_gpu_ids(allowed_gpu_ids)
++        self._memory_threshold_mb = memory_threshold_mb
++        self._probe_context_enabled = probe_context
++        self._lock_dir = Path(lock_dir).expanduser()
++        self._logger = logger or logging.getLogger(__name__)
++
++    @staticmethod
++    def normalize_gpu_ids(
++        value: str | list[int] | tuple[int, ...] | None,
++    ) -> tuple[int, ...] | None:
++        if value is None:
++            return None
++        raw_values: list[str | int]
++        if isinstance(value, str):
++            raw_values = [part.strip() for part in value.split(",") if part.strip()]
++        else:
++            raw_values = list(value)
++        if not raw_values:
++            raise ValueError("singularity_gpu_ids must contain at least one GPU index")
++
++        gpu_ids: list[int] = []
++        for raw_value in raw_values:
++            try:
++                gpu_id = int(raw_value)
++            except (TypeError, ValueError) as exc:
++                raise ValueError(
++                    f"Invalid GPU index in singularity_gpu_ids: {raw_value!r}"
++                ) from exc
++            if gpu_id < 0:
++                raise ValueError("singularity_gpu_ids cannot contain negative indices")
++            if gpu_id not in gpu_ids:
++                gpu_ids.append(gpu_id)
++        return tuple(gpu_ids)
++
++    async def _run_command(
++        self,
++        command: list[str],
++        *,
++        env: dict[str, str] | None = None,
++        timeout_sec: float = 10.0,
++    ) -> subprocess.CompletedProcess[str]:
++        try:
++            return await asyncio.to_thread(
++                subprocess.run,
++                command,
++                capture_output=True,
++                text=True,
++                timeout=timeout_sec,
++                env=env,
++            )
++        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
++            raise GpuAllocationError(
++                f"GPU inspection command failed: {' '.join(command)}: {exc}"
++            ) from exc
++
++    async def _query_inventory(self) -> dict[int, int]:
++        result = await self._run_command(
++            [
++                "nvidia-smi",
++                "--query-gpu=index,memory.used",
++                "--format=csv,noheader,nounits",
++            ]
++        )
++        if result.returncode != 0:
++            message = result.stderr.strip() or result.stdout.strip()
++            raise GpuAllocationError(f"nvidia-smi GPU inventory failed: {message}")
++
++        inventory: dict[int, int] = {}
++        for line in result.stdout.splitlines():
++            fields = [field.strip() for field in line.split(",")]
++            if len(fields) != 2:
++                continue
++            try:
++                inventory[int(fields[0])] = int(fields[1])
++            except ValueError:
++                continue
++        if not inventory:
++            raise GpuAllocationError("nvidia-smi returned no parseable GPUs")
++        return inventory
++
++    async def _gpu_has_compute_process(self, gpu_id: int) -> tuple[bool, str]:
++        result = await self._run_command(
++            [
++                "nvidia-smi",
++                "-i",
++                str(gpu_id),
++                "--query-compute-apps=pid,process_name",
++                "--format=csv,noheader,nounits",
++            ]
++        )
++        if result.returncode != 0:
++            message = result.stderr.strip() or result.stdout.strip()
++            return True, f"process query failed: {message}"
++        processes = [
++            line.strip() for line in result.stdout.splitlines() if line.strip()
++        ]
++        if processes:
++            return True, f"compute processes: {'; '.join(processes)}"
++        return False, ""
++
++    async def _probe_gpu_context(self, gpu_id: int) -> tuple[bool, str]:
++        probe_env = os.environ.copy()
++        probe_env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
++        result = await self._run_command(
++            [sys.executable, "-c", _CUDA_CONTEXT_PROBE],
++            env=probe_env,
++        )
++        if result.returncode == 0:
++            return True, ""
++        message = result.stderr.strip() or result.stdout.strip()
++        return False, f"CUDA context probe failed: {message}"
++
++    def _try_lock(self, gpu_id: int) -> IO[str] | None:
++        if sys.platform == "win32":
++            raise GpuAllocationError("Singularity GPU allocation requires Linux")
++        self._lock_dir.mkdir(parents=True, exist_ok=True)
++        lock_path = self._lock_dir / f"harbor-singularity-gpu-{gpu_id}.lock"
++        file_descriptor = os.open(lock_path, os.O_RDONLY | os.O_CREAT, 0o666)
++        lock_file = os.fdopen(file_descriptor)
++        try:
++            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
++        except BlockingIOError:
++            lock_file.close()
++            return None
++        return lock_file
++
++    async def acquire(self, count: int) -> GpuLease:
++        if count < 1:
++            return GpuLease((), [])
++
++        inventory = await self._query_inventory()
++        candidate_ids = self._allowed_gpu_ids or tuple(sorted(inventory))
++        selected_ids: list[int] = []
++        lock_files: list[IO[str]] = []
++        rejected: dict[int, str] = {}
++
++        for gpu_id in candidate_ids:
++            if gpu_id not in inventory:
++                rejected[gpu_id] = "not reported by nvidia-smi"
++                continue
++
++            lock_file = self._try_lock(gpu_id)
++            if lock_file is None:
++                rejected[gpu_id] = "leased by another Harbor trial"
++                continue
++
++            memory_mb = inventory[gpu_id]
++            if memory_mb > self._memory_threshold_mb:
++                rejected[gpu_id] = (
++                    f"memory.used={memory_mb} MiB exceeds "
++                    f"{self._memory_threshold_mb} MiB"
++                )
++                lock_file.close()
++                continue
++
++            has_process, process_reason = await self._gpu_has_compute_process(gpu_id)
++            if has_process:
++                rejected[gpu_id] = process_reason
++                lock_file.close()
++                continue
++
++            if self._probe_context_enabled:
++                healthy, probe_reason = await self._probe_gpu_context(gpu_id)
++                if not healthy:
++                    rejected[gpu_id] = probe_reason
++                    lock_file.close()
++                    continue
++
++            selected_ids.append(gpu_id)
++            lock_files.append(lock_file)
++            if len(selected_ids) == count:
++                lease = GpuLease(tuple(selected_ids), lock_files)
++                self._logger.info(
++                    "Reserved physical GPU(s) %s for this Singularity trial",
++                    lease.cuda_visible_devices,
++                )
++                return lease
++
++        partial_lease = GpuLease(tuple(selected_ids), lock_files)
++        partial_lease.release()
++        details = ", ".join(
++            f"GPU {gpu_id}: {reason}" for gpu_id, reason in rejected.items()
++        )
++        raise GpuAllocationError(
++            f"Requested {count} GPU(s), but only {len(selected_ids)} passed "
++            f"Singularity allocation checks. {details}"
++        )
+diff --git a/src/harbor/environments/singularity/singularity.py b/src/harbor/environments/singularity/singularity.py
+index d27cda3..1bfb09a 100644
+--- a/src/harbor/environments/singularity/singularity.py
++++ b/src/harbor/environments/singularity/singularity.py
+@@ -42,6 +42,7 @@ from harbor.environments.capabilities import (
+     EnvironmentCapabilities,
+     EnvironmentResourceCapabilities,
+ )
++from harbor.environments.singularity.gpu_allocator import GpuAllocator, GpuLease
+ from harbor.models.environment_type import EnvironmentType
+ from harbor.models.task.config import EnvironmentConfig
+ from harbor.models.trial.paths import TrialPaths
+@@ -70,6 +71,10 @@ class SingularityEnvironment(BaseEnvironment):
+         singularity_no_mount: Comma-separated mount types to suppress
+             (default "home,tmp,bind-paths"). Use "" to allow all Singularity mounts.
+         singularity_nv: Enable NVIDIA GPU support via ``singularity exec --nv``.
++        singularity_gpu_ids: Optional comma-separated physical GPU allowlist.
++        singularity_gpu_memory_threshold_mb: Maximum idle memory for allocation.
++        singularity_gpu_context_probe: Require a successful CUDA context probe.
++        singularity_gpu_lock_dir: Directory for cross-trial advisory lock files.
+     """
+ 
+     def __init__(
+@@ -85,6 +90,10 @@ class SingularityEnvironment(BaseEnvironment):
+         singularity_force_pull: bool = False,
+         singularity_no_mount: str | None = None,
+         singularity_nv: bool = False,
++        singularity_gpu_ids: str | list[int] | tuple[int, ...] | None = None,
++        singularity_gpu_memory_threshold_mb: int = 256,
++        singularity_gpu_context_probe: bool = True,
++        singularity_gpu_lock_dir: Path | str = "/tmp",
+         **kwargs,
+     ):
+         if singularity_image_cache_dir:
+@@ -111,6 +120,15 @@ class SingularityEnvironment(BaseEnvironment):
+             **kwargs,
+         )
+ 
++        self._gpu_allocator = GpuAllocator(
++            allowed_gpu_ids=singularity_gpu_ids,
++            memory_threshold_mb=singularity_gpu_memory_threshold_mb,
++            probe_context=singularity_gpu_context_probe,
++            lock_dir=singularity_gpu_lock_dir,
++            logger=self.logger,
++        )
++        self._gpu_lease: GpuLease | None = None
++
+         self._server_process: asyncio.subprocess.Process | None = None
+         self._server_port: int | None = None
+         self._staging_dir: Path | None = None
+@@ -424,6 +442,7 @@ class SingularityEnvironment(BaseEnvironment):
+                 *cmd,
+                 stdout=asyncio.subprocess.PIPE,
+                 stderr=asyncio.subprocess.STDOUT,
++                env=self._singularity_process_env(),
+             )
+ 
+             self._stream_task = asyncio.create_task(self._stream_server_output())
+@@ -498,6 +517,16 @@ class SingularityEnvironment(BaseEnvironment):
+             f"{max_port_retries} port attempts"
+         )
+ 
++    def _singularity_process_env(self) -> dict[str, str]:
++        process_env = os.environ.copy()
++        if self._gpu_lease and self._gpu_lease.gpu_ids:
++            visible_devices = self._gpu_lease.cuda_visible_devices
++            # Singularity and Apptainer use these host-side prefixes to set the
++            # unprefixed variable inside the container.
++            process_env["SINGULARITYENV_CUDA_VISIBLE_DEVICES"] = visible_devices
++            process_env["APPTAINERENV_CUDA_VISIBLE_DEVICES"] = visible_devices
++        return process_env
++
+     async def _stream_server_output(self) -> None:
+         """Stream server stdout/stderr to logger in real-time."""
+         if not self._server_process or not self._server_process.stdout:
+@@ -683,12 +712,33 @@ class SingularityEnvironment(BaseEnvironment):
+                 self._docker_image, force_pull=force_pull
+             )
+ 
+-        await self._start_server()
+-
+-        await self._upload_environment_dir_after_start()
++        try:
++            if self._singularity_nv and self._effective_gpus > 0:
++                self._gpu_lease = await self._gpu_allocator.acquire(
++                    self._effective_gpus
++                )
++            await self._start_server()
++            await self._upload_environment_dir_after_start()
++        except BaseException:
++            if self._gpu_lease:
++                self._gpu_lease.release()
++                self._gpu_lease = None
++            raise
+ 
+     @override
+     async def stop(self, delete: bool) -> None:
++        try:
++            await self._stop_server(delete)
++        finally:
++            if self._gpu_lease:
++                self.logger.info(
++                    "Released physical GPU(s) %s",
++                    self._gpu_lease.cuda_visible_devices,
++                )
++                self._gpu_lease.release()
++                self._gpu_lease = None
++
++    async def _stop_server(self, delete: bool) -> None:
+         """Stop the Singularity environment and all child processes."""
+         shutdown_requested = False
+         if (
+diff --git a/tests/unit/environments/test_singularity_gpu_allocator.py b/tests/unit/environments/test_singularity_gpu_allocator.py
+new file mode 100644
+index 0000000..4965548
+--- /dev/null
++++ b/tests/unit/environments/test_singularity_gpu_allocator.py
+@@ -0,0 +1,76 @@
++from unittest.mock import AsyncMock
++
++import pytest
++
++from harbor.environments.singularity.gpu_allocator import (
++    GpuAllocationError,
++    GpuAllocator,
++)
++
++
++def test_normalize_gpu_ids() -> None:
++    assert GpuAllocator.normalize_gpu_ids("3, 1,3") == (3, 1)
++    assert GpuAllocator.normalize_gpu_ids([2, 0]) == (2, 0)
++    assert GpuAllocator.normalize_gpu_ids(None) is None
++
++
++@pytest.mark.parametrize("value", ["", "-1", "gpu0"])
++def test_normalize_gpu_ids_rejects_invalid_values(value: str) -> None:
++    with pytest.raises(ValueError):
++        GpuAllocator.normalize_gpu_ids(value)
++
++
++def configured_allocator(tmp_path, gpu_ids: str = "0,1") -> GpuAllocator:
++    allocator = GpuAllocator(
++        allowed_gpu_ids=gpu_ids,
++        lock_dir=tmp_path,
++        memory_threshold_mb=256,
++    )
++    allocator._query_inventory = AsyncMock(return_value={0: 4, 1: 8})
++    allocator._gpu_has_compute_process = AsyncMock(return_value=(False, ""))
++    allocator._probe_gpu_context = AsyncMock(return_value=(True, ""))
++    return allocator
++
++
++@pytest.mark.asyncio
++async def test_concurrent_allocators_receive_distinct_gpus(tmp_path) -> None:
++    first_allocator = configured_allocator(tmp_path)
++    second_allocator = configured_allocator(tmp_path)
++
++    first_lease = await first_allocator.acquire(1)
++    second_lease = await second_allocator.acquire(1)
++    try:
++        assert first_lease.gpu_ids == (0,)
++        assert first_lease.cuda_visible_devices == "0"
++        assert second_lease.gpu_ids == (1,)
++    finally:
++        first_lease.release()
++        second_lease.release()
++
++
++@pytest.mark.asyncio
++async def test_failed_context_probe_skips_gpu(tmp_path) -> None:
++    allocator = configured_allocator(tmp_path)
++    allocator._probe_gpu_context = AsyncMock(
++        side_effect=[(False, "CUDA error 999"), (True, "")]
++    )
++
++    lease = await allocator.acquire(1)
++    try:
++        assert lease.gpu_ids == (1,)
++    finally:
++        lease.release()
++
++
++@pytest.mark.asyncio
++async def test_partial_allocation_is_released_on_failure(tmp_path) -> None:
++    allocator = configured_allocator(tmp_path, gpu_ids="0")
++    with pytest.raises(GpuAllocationError, match="Requested 2 GPU"):
++        await allocator.acquire(2)
++
++    next_allocator = configured_allocator(tmp_path, gpu_ids="0")
++    lease = await next_allocator.acquire(1)
++    try:
++        assert lease.gpu_ids == (0,)
++    finally:
++        lease.release()

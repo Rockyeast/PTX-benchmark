@@ -1,0 +1,17 @@
+# ptx-bench/ptx-rmsnorm-forward-bf16-n4096
+
+Feasibility implementation of a BF16 RMSNorm plain-forward PTX task specialized
+for `N=4096` on NVIDIA B200.
+
+Current status: feasibility-validated on an NVIDIA B200. The first Harbor
+Oracle run passed six correctness cases and three performance shapes in 18
+seconds. The Oracle and hidden Reference are intentionally the same simple CUDA
+algorithm compiled to PTX, and produced raw speedup `1.000141864` as expected.
+
+This result validates the raw PTX ABI, independent correctness checks, and
+timing pipeline. It does not establish model discrimination or parity with
+INT21's optimized B200 implementation. Those require an INT21-backed external
+comparison, negative fixtures, and real Agent runs.
+
+Design contract:
+[`../../docs/tasks/ptx-rmsnorm-forward-bf16-n4096-spec.md`](../../docs/tasks/ptx-rmsnorm-forward-bf16-n4096-spec.md).

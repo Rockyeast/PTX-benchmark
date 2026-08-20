@@ -1,0 +1,19 @@
+# Dataset manifest for ptx-bench/ptx-bench-dev
+# Add tasks using: harbor add <org>/<name>
+# Publish using: harbor publish
+
+[dataset]
+name = "ptx-bench/ptx-bench-dev"
+version = "1.0.0"
+description = "Development dataset for PTX-Bench task construction and calibration on NVIDIA B200."
+authors = []
+keywords = [ "ptx", "cuda", "b200", "llm-infrastructure", "development",]
+
+[[tasks]]
+name = "ptx-bench/ptx-rmsnorm-forward-bf16-n4096"
+digest = "sha256:5fe2638b37a3dc70a6568798b847450f06a4dd0aef475d9847a8951967efd498"
+
+[[tasks]]
+name = "ptx-bench/ptx-vector-add"
+digest = "sha256:928be5188f5c40d36639f0e8536f96ab24c22ba0418ed287c9732a86b7be76d1"
+

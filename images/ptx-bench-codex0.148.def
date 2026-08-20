@@ -1,0 +1,45 @@
+Bootstrap: localimage
+From: /home/zhuominc/rockyeast-work/containers/ptx-bench-cuda13.2.1-ubuntu24.04-v1.sif
+
+%labels
+    org.opencontainers.image.title "PTX-Bench Codex environment"
+    org.opencontainers.image.description "PTX-Bench CUDA environment with pinned Codex CLI"
+    org.ptx-bench.image.version "cuda13.2.1-codex0.148.0-v1"
+    org.ptx-bench.agent.name "codex"
+    org.ptx-bench.agent.version "0.148.0"
+
+%post
+    set -eux
+
+    node_version="22.23.2"
+    node_archive="node-v${node_version}-linux-x64.tar.xz"
+    node_url="https://nodejs.org/dist/v${node_version}"
+    build_dir="$(mktemp -d)"
+
+    cd "$build_dir"
+    curl -fsSLO "${node_url}/${node_archive}"
+    curl -fsSLO "${node_url}/SHASUMS256.txt"
+    grep " ${node_archive}$" SHASUMS256.txt | sha256sum --check --strict -
+    tar -xJf "$node_archive"
+
+    mv "node-v${node_version}-linux-x64" "/opt/node-v${node_version}"
+    ln -s "/opt/node-v${node_version}/bin/node" /usr/local/bin/node
+    ln -s "/opt/node-v${node_version}/bin/npm" /usr/local/bin/npm
+    ln -s "/opt/node-v${node_version}/bin/npx" /usr/local/bin/npx
+
+    mkdir -p /opt/codex-cli
+    npm install --global --prefix /opt/codex-cli "@openai/codex@0.148.0"
+    ln -s /opt/codex-cli/bin/codex /usr/local/bin/codex
+
+    node --version
+    npm --version
+    codex --version
+
+    cd /
+    rm -rf "$build_dir" /root/.npm
+
+%test
+    test "$(node --version)" = "v22.23.2"
+    codex --version | grep "0.148.0"
+    python3 --version
+    ptxas --version
