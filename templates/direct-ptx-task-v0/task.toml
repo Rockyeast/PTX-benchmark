@@ -1,0 +1,40 @@
+schema_version = "1.4"
+artifacts = []
+
+[task]
+name = "ptx-bench/@@TASK_SLUG@@"
+version = "1.0.0"
+description = @@DESCRIPTION_TOML@@
+authors = []
+keywords = ["ptx", "cuda", @@GPU_KEYWORD_TOML@@, "direct-ptx"]
+
+[metadata]
+benchmark_setting = "direct-ptx"
+template_version = "direct-ptx-v0"
+hardware_target = @@HARDWARE_TARGET_TOML@@
+ptx_docs_path = "/opt/ptx-docs"
+ptx_validation_tools = ["ptxas", "cuobjdump"]
+prohibited_high_level_toolchains = ["nvcc", "NVRTC", "NVVM", "Triton"]
+release_ready = false
+
+[verifier]
+timeout_sec = @@VERIFIER_TIMEOUT@@
+collect = []
+
+[verifier.env]
+
+[agent]
+timeout_sec = @@AGENT_TIMEOUT@@
+
+[environment]
+network_mode = "@@NETWORK_MODE@@"
+@@ALLOWED_HOSTS_TOML@@
+build_timeout_sec = 900.0
+os = "linux"
+gpus = 1
+gpu_types = [@@GPU_TYPE_TOML@@]
+mcp_servers = []
+
+[environment.env]
+
+[solution.env]

@@ -1,0 +1,8 @@
+#!/bin/bash
+
+set -euo pipefail
+
+printf '%s\n' \
+    'TODO(task author): implement an auditable direct-PTX Oracle that writes /app/kernel.ptx.' \
+    >&2
+exit 1

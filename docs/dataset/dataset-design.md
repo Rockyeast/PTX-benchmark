@@ -167,7 +167,8 @@ direct-PTX
 2. 将 RMSNorm 从 feasibility 推进到 agent-calibrated；
 3. 按 [`task-catalog.md`](task-catalog.md) 依次完成五道 pilot；
 4. 检查不同家族的实现成本、耗时和模型分布；
-5. 冻结统一 task authoring 模板和 release gate；
+5. 用 [`../task-authoring-template.md`](../task-authoring-template.md) 的 v0 模板完成
+   不同家族 pilot，再冻结统一 task authoring v1 模板和 release gate；
 6. 扩展到约 20 道，再决定是否扩到 50～100 道；
 7. 最后建立 release manifest、模型矩阵和 evolution track。
 
