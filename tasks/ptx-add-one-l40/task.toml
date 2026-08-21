@@ -1,0 +1,37 @@
+schema_version = "1.4"
+artifacts = [{ source = "/app/kernel.ptx", destination = "kernel.ptx" }]
+
+[task]
+name = "ptx-bench/ptx-add-one-l40"
+version = "1.0.0"
+description = "Create and execute a minimal pure-PTX add-one kernel on NVIDIA L40."
+authors = []
+keywords = ["ptx", "cuda", "l40", "smoke", "calibration", "direct-ptx"]
+
+[metadata]
+benchmark_setting = "direct-ptx"
+template_version = "direct-ptx-v0"
+calibration_only = true
+hardware_target = "NVIDIA L40 (sm_89)"
+release_ready = false
+
+[verifier]
+timeout_sec = 120.0
+collect = []
+
+[verifier.env]
+
+[agent]
+timeout_sec = 600.0
+network_mode = "allowlist"
+allowed_hosts = ["lovelace.ece.local.cmu.edu"]
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 900.0
+os = "linux"
+mcp_servers = []
+
+[environment.env]
+
+[solution.env]
