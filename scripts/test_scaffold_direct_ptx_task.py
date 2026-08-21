@@ -56,10 +56,11 @@ class ScaffoldDirectPtxTaskTest(unittest.TestCase):
             self.assertTrue(expected.issubset({str(p.relative_to(task)) for p in task.rglob("*") if p.is_file()}))
             config = tomllib.loads((task / "task.toml").read_text())
             self.assertEqual(config["task"]["name"], "ptx-bench/ptx-test-kernel")
-            self.assertEqual(config["environment"]["network_mode"], "allowlist")
+            self.assertEqual(config["environment"]["network_mode"], "public")
+            self.assertEqual(config["agent"]["network_mode"], "allowlist")
             self.assertEqual(config["environment"]["gpu_types"], ["B200"])
             self.assertEqual(
-                config["environment"]["allowed_hosts"],
+                config["agent"]["allowed_hosts"],
                 ["models.internal.example"],
             )
             for path in task.rglob("*"):
@@ -118,20 +119,6 @@ class ScaffoldDirectPtxTaskTest(unittest.TestCase):
                 completed_release_check.stderr,
             )
 
-            task_toml.write_text(
-                task_toml.read_text()
-                .replace(
-                    '[agent]\ntimeout_sec = 600.0\n',
-                    '[agent]\ntimeout_sec = 600.0\n'
-                    'network_mode = "allowlist"\n'
-                    'allowed_hosts = ["models.internal.example"]\n',
-                )
-                .replace(
-                    '[environment]\nnetwork_mode = "allowlist"\n'
-                    'allowed_hosts = ["models.internal.example"]\n',
-                    '[environment]\nnetwork_mode = "public"\n',
-                )
-            )
             split_phase_release_check = subprocess.run(
                 [sys.executable, str(CHECKER), str(task), "--release"],
                 capture_output=True,

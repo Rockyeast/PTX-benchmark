@@ -35,7 +35,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--release",
         action="store_true",
-        help="Require completed TODOs, restricted network, pinned docs, and release_ready=true",
+        help=(
+            "Require completed TODOs, restricted effective Agent networking, "
+            "pinned docs, and release_ready=true"
+        ),
     )
     return parser.parse_args()
 

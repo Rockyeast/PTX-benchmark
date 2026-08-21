@@ -42,15 +42,18 @@ def parse_args() -> argparse.Namespace:
         choices=("public", "allowlist", "no-network"),
         required=True,
         help=(
-            "Explicit Harbor environment baseline; a public baseline requires "
-            "a restricted [agent] phase override before release"
+            "Explicit Harbor Agent-phase network policy; public is "
+            "development-only and cannot pass the release check"
         ),
     )
     parser.add_argument(
         "--allowed-host",
         action="append",
         default=[],
-        help="Allowed hostname/IP for network-mode=allowlist; repeat as needed",
+        help=(
+            "Agent-accessible hostname/IP for network-mode=allowlist; "
+            "repeat as needed"
+        ),
     )
     parser.add_argument(
         "--output-root",

@@ -33,8 +33,9 @@ python3 scripts/check_direct_ptx_task.py tasks/@@TASK_SLUG@@ --release
 
 The environment follows the direct-PTX policy: `ptxas` and `cuobjdump` are
 available, while `nvcc`, NVRTC, NVVM, and Triton are not provided. Every
-generated task must explicitly choose an environment baseline. A public
-baseline is acceptable for framework setup only when `[agent]` explicitly
-overrides it with `allowlist` or `no-network`; the release checker evaluates
-the effective Agent-phase policy. Use a model-API allowlist for the normal
+generated task must explicitly choose its Agent-phase network policy. The
+trusted environment baseline remains public for setup and pinned artifact
+fetches; Harbor overrides it with the generated `allowlist` or `no-network`
+policy while the untrusted Agent runs. The release checker evaluates this
+effective Agent-phase policy. Use a model-API allowlist for the normal
 served-model setting.

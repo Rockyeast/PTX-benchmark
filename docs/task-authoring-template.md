@@ -41,10 +41,10 @@ python3 scripts/scaffold_direct_ptx_task.py \
   --allowed-host lovelace.ece.local.cmu.edu
 ```
 
-生成器不提供网络默认值，作者必须显式选择 environment baseline。正常的
-served-model setting 可以直接使用 `allowlist`；不需要外部模型连接时使用
-`no-network`。如果 Harbor 的 Agent scaffold 安装阶段需要公网，可以保留
-`[environment] public`，但必须在 `[agent]` 中显式覆盖为模型 API `allowlist`：
+生成器不提供 Agent 网络默认值，作者必须显式选择 Agent 作答阶段的策略。正常的
+served-model setting 使用模型 API `allowlist`；不需要外部模型连接时使用
+`no-network`。模板保留 `[environment] public` 供可信的构建、setup 和 verifier
+阶段获取固定且经过哈希校验的依赖，Harbor 在 Agent 开始作答时应用更严格的阶段覆盖：
 
 ```bash
 python3 scripts/scaffold_direct_ptx_task.py \

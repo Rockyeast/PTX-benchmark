@@ -25,10 +25,13 @@ collect = []
 
 [agent]
 timeout_sec = @@AGENT_TIMEOUT@@
-
-[environment]
 network_mode = "@@NETWORK_MODE@@"
 @@ALLOWED_HOSTS_TOML@@
+
+[environment]
+# Trusted environment setup may fetch pinned, hash-verified artifacts. Harbor
+# applies the stricter phase override above while the untrusted Agent runs.
+network_mode = "public"
 build_timeout_sec = 900.0
 os = "linux"
 gpus = 1
