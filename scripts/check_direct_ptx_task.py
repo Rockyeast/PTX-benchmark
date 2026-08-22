@@ -17,14 +17,26 @@ REQUIRED_FILES = (
     "task.toml",
     "instruction.md",
     "environment/Dockerfile",
-    "environment/policy-check.sh",
-    "environment/ptx-docs/manifest.toml",
+    "environment/docker-compose.yaml",
+    "environment/files/direct-ptx-policy-check",
+    "environment/files/setup.sh",
+    "environment/files/ptx-docs/manifest.toml",
     "solution/solve.sh",
+    "tests/direct-ptx-policy-check",
+    "tests/ptx-docs-manifest.toml",
     "tests/test.sh",
+    "tests/verify_hardware.py",
     "tests/verify_and_benchmark.py",
 )
 SHA256 = re.compile(r"[0-9a-f]{64}$")
+FROM_INSTRUCTION = re.compile(r"^\s*FROM\s+.+$", re.IGNORECASE | re.MULTILINE)
+PINNED_FROM = re.compile(
+    r"^\s*FROM\s+(?:--platform=\S+\s+)?\S+@sha256:[0-9a-f]{64}"
+    r"(?:\s+AS\s+\S+)?\s*$",
+    re.IGNORECASE,
+)
 NETWORK_MODES = {"public", "allowlist", "no-network"}
+SCAFFOLD_SENTINEL = "DIRECT_PTX_SCAFFOLD_UNIMPLEMENTED"
 
 
 def parse_args() -> argparse.Namespace:
@@ -96,7 +108,7 @@ def validate_network_policy(
 
 
 def validate_document_snapshot(root: Path, errors: list[str]) -> None:
-    docs_root = root / "environment" / "ptx-docs"
+    docs_root = root / "environment" / "files" / "ptx-docs"
     manifest_path = docs_root / "manifest.toml"
     try:
         manifest = load_toml(manifest_path)
@@ -118,7 +130,7 @@ def validate_document_snapshot(root: Path, errors: list[str]) -> None:
     try:
         document.relative_to(docs_root.resolve())
     except ValueError:
-        errors.append("PTX document_path escapes environment/ptx-docs")
+        errors.append("PTX document_path escapes environment/files/ptx-docs")
         return
     if not document.is_file():
         errors.append(f"missing pinned PTX documentation file: {relative}")
@@ -131,6 +143,71 @@ def validate_document_snapshot(root: Path, errors: list[str]) -> None:
         errors.append(
             f"PTX documentation SHA-256 mismatch: expected {expected_hash}, got {actual_hash}"
         )
+
+
+def validate_kernel_artifact(task: dict[str, object], errors: list[str]) -> None:
+    artifacts = task.get("artifacts")
+    if not isinstance(artifacts, list):
+        errors.append("task artifacts must be a list")
+        return
+    for artifact in artifacts:
+        if isinstance(artifact, str) and artifact == "/app/kernel.ptx":
+            return
+        if (
+            isinstance(artifact, dict)
+            and artifact.get("source") == "/app/kernel.ptx"
+            and artifact.get("destination") == "kernel.ptx"
+        ):
+            return
+    errors.append(
+        "task artifacts must collect /app/kernel.ptx as destination kernel.ptx"
+    )
+
+
+def validate_trusted_verifier_assets(root: Path, errors: list[str]) -> None:
+    pairs = (
+        (
+            "environment/files/direct-ptx-policy-check",
+            "tests/direct-ptx-policy-check",
+            "Agent-visible and hidden Direct-PTX policy checkers must match",
+        ),
+        (
+            "environment/files/ptx-docs/manifest.toml",
+            "tests/ptx-docs-manifest.toml",
+            "runtime and hidden PTX documentation manifests must match",
+        ),
+    )
+    for public_relative, hidden_relative, message in pairs:
+        if (root / public_relative).read_bytes() != (root / hidden_relative).read_bytes():
+            errors.append(message)
+
+
+def validate_release_implementation(root: Path, errors: list[str]) -> None:
+    implementation_files = (
+        root / "solution" / "solve.sh",
+        root / "tests" / "verify_and_benchmark.py",
+    )
+    for path in implementation_files:
+        content = path.read_text()
+        if SCAFFOLD_SENTINEL in content:
+            errors.append(
+                f"scaffold implementation marker remains in {path.relative_to(root)}"
+            )
+        if "NotImplementedError" in content:
+            errors.append(
+                f"unimplemented verifier/Oracle logic remains in {path.relative_to(root)}"
+            )
+
+    dockerfile = (root / "environment" / "Dockerfile").read_text()
+    from_instructions = FROM_INSTRUCTION.findall(dockerfile)
+    if not from_instructions:
+        errors.append("environment/Dockerfile must contain a FROM instruction")
+    for instruction in from_instructions:
+        if not PINNED_FROM.fullmatch(instruction):
+            errors.append(
+                "every environment/Dockerfile FROM image must be pinned by "
+                f"SHA-256 digest; found: {instruction.strip()}"
+            )
 
 
 def main() -> int:
@@ -157,11 +234,27 @@ def main() -> int:
         print(f"error: invalid task.toml: {error}", file=sys.stderr)
         return 1
 
+    validate_kernel_artifact(task, errors)
+    validate_trusted_verifier_assets(root, errors)
+
     metadata = task.get("metadata", {})
     environment = task.get("environment", {})
     agent = task.get("agent", {})
     if not isinstance(metadata, dict) or metadata.get("benchmark_setting") != "direct-ptx":
         errors.append("metadata.benchmark_setting must be direct-ptx")
+    if not isinstance(metadata, dict) or not metadata.get("template_version"):
+        errors.append("metadata.template_version must be set")
+    if not isinstance(metadata, dict) or metadata.get("required_gpus") != 1:
+        errors.append("metadata.required_gpus must be 1")
+    if not isinstance(metadata, dict) or not metadata.get("required_gpu_type"):
+        errors.append("metadata.required_gpu_type must be set")
+    if isinstance(environment, dict) and (
+        "gpus" in environment or "gpu_types" in environment
+    ):
+        errors.append(
+            "GPU scheduling is runtime-backend-specific; keep gpus/gpu_types out "
+            "of [environment] and record the requirement in [metadata]"
+        )
     environment_mode, _ = validate_network_policy(
         environment,
         "environment",
@@ -190,7 +283,15 @@ def main() -> int:
             )
         if not isinstance(metadata, dict) or metadata.get("release_ready") is not True:
             errors.append("metadata.release_ready must be true for --release")
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("implementation_status") != "implemented"
+        ):
+            errors.append(
+                "metadata.implementation_status must be implemented for --release"
+            )
         validate_document_snapshot(root, errors)
+        validate_release_implementation(root, errors)
 
     if errors:
         for error in errors:

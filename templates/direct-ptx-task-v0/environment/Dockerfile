@@ -1,9 +1,11 @@
+# TODO(task author): pin this exact base image by digest before release, for
+# example FROM nvidia/cuda:<tag>@sha256:<64 lowercase hexadecimal characters>.
 FROM nvidia/cuda:13.2.1-devel-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 \
+    && apt-get install -y --no-install-recommends poppler-utils python3 \
     && rm -f \
         /usr/local/cuda/bin/__nvcc_device_query \
         /usr/local/cuda/bin/cudafe++ \
@@ -17,8 +19,8 @@ RUN apt-get update \
     && find -L /usr/local/cuda -type l -iname '*nvvm*' -delete \
     && rm -rf /var/lib/apt/lists/*
 
-COPY ptx-docs/ /opt/ptx-docs/
-COPY policy-check.sh /usr/local/bin/direct-ptx-policy-check
+COPY files/ptx-docs/ /opt/ptx-docs/
+COPY files/direct-ptx-policy-check /usr/local/bin/direct-ptx-policy-check
 
 RUN chmod 0555 /usr/local/bin/direct-ptx-policy-check \
     && chmod -R a-w /opt/ptx-docs \

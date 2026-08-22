@@ -4,6 +4,13 @@ set -uo pipefail
 
 mkdir -p /logs/verifier
 
+if ! /tests/direct-ptx-policy-check \
+    --trusted-manifest /tests/ptx-docs-manifest.toml \
+    > /logs/verifier/environment-policy.log 2>&1; then
+    printf 'Direct-PTX environment policy check failed\n' >&2
+    exit 1
+fi
+
 ptxas_log=/logs/verifier/ptxas.txt
 candidate_cubin=/tmp/candidate.cubin
 

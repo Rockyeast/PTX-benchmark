@@ -14,6 +14,11 @@ from pathlib import Path
 
 ENTRY_NAME = "@@ENTRY_NAME@@"
 MAX_PTX_BYTES = 1 << 20
+# DIRECT_PTX_SCAFFOLD_UNIMPLEMENTED
+
+
+class CandidateRejected(Exception):
+    """The submitted PTX is invalid or computes a wrong result."""
 
 
 def write_json(path: Path, payload: dict[str, object]) -> None:
@@ -33,24 +38,30 @@ def parse_args() -> argparse.Namespace:
 
 def validate_submission_file(candidate: Path) -> str:
     if not candidate.is_file():
-        raise FileNotFoundError(f"missing PTX submission: {candidate}")
+        raise CandidateRejected(f"missing PTX submission: {candidate}")
     size = candidate.stat().st_size
     if size == 0:
-        raise ValueError("PTX submission is empty")
+        raise CandidateRejected("PTX submission is empty")
     if size > MAX_PTX_BYTES:
-        raise ValueError(
+        raise CandidateRejected(
             f"PTX submission is {size} bytes; limit is {MAX_PTX_BYTES} bytes"
         )
-    source = candidate.read_text()
+    try:
+        source = candidate.read_text()
+    except UnicodeDecodeError as error:
+        raise CandidateRejected("PTX submission is not UTF-8 text") from error
     if ".entry" not in source or ENTRY_NAME not in source:
-        raise ValueError(f"missing visible PTX entry {ENTRY_NAME!r}")
+        raise CandidateRejected(f"missing visible PTX entry {ENTRY_NAME!r}")
     return source
 
 
 def verify_task_specific_correctness(_source: str) -> None:
     # TODO(task author): load PTX with the CUDA Driver API, execute independent
     # hidden cases, compare against a truth source that does not depend on the
-    # Candidate or Oracle, and check memory canaries where applicable.
+    # Candidate or Oracle, and check memory canaries where applicable. Raise
+    # CandidateRejected for a wrong submission; let infrastructure/programming
+    # errors propagate so Harbor records a verifier exception rather than a
+    # model score of zero.
     raise NotImplementedError("task-specific correctness verifier is not implemented")
 
 
@@ -69,7 +80,7 @@ def main() -> int:
         "speedup_vs_reference": 0.0,
     }
     metrics: dict[str, object] = {
-        "template_version": "direct-ptx-v0",
+        "template_version": "direct-ptx-v0.1",
         "hardware_target": @@HARDWARE_TARGET_PY@@,
         "entry": ENTRY_NAME,
         "status": "failed",
@@ -83,14 +94,29 @@ def main() -> int:
         reward.update(performance)
         metrics["status"] = "passed"
         metrics["performance"] = performance
-    except Exception as error:  # A bad submission receives zero with evidence.
+    except CandidateRejected as error:
+        metrics["status"] = "candidate_rejected"
         metrics["error_type"] = type(error).__name__
         metrics["error"] = str(error)
         print(f"PTX verification failed: {type(error).__name__}: {error}", file=sys.stderr)
+        write_json(args.log, metrics)
+        write_json(args.reward, reward)
+        return 1
+    except Exception as error:
+        metrics["status"] = "infrastructure_error"
+        metrics["error_type"] = type(error).__name__
+        metrics["error"] = str(error)
+        print(
+            f"PTX verifier infrastructure failure: {type(error).__name__}: {error}",
+            file=sys.stderr,
+        )
+        write_json(args.log, metrics)
+        write_json(args.reward, reward)
+        return 2
 
     write_json(args.log, metrics)
     write_json(args.reward, reward)
-    return 0 if reward["correctness"] == 1.0 else 1
+    return 0
 
 
 if __name__ == "__main__":

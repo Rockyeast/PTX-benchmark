@@ -1,0 +1,6 @@
+schema_version = "1.0"
+document_path = "ptx-isa-9.2.pdf"
+document_version = "NVIDIA PTX ISA 9.2"
+source_url = "https://docs.nvidia.com/cuda/archive/13.2.1/pdf/ptx_isa_9.2.pdf"
+sha256 = "82bebdef912a6c5622ea1622688fdfb40949c8e12071af184dd3349042a2756c"
+license = "NVIDIA documentation terms; PDF fetched for local evaluation and not redistributed"

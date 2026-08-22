@@ -46,11 +46,16 @@ class ScaffoldDirectPtxTaskTest(unittest.TestCase):
                 "task.toml",
                 "instruction.md",
                 "environment/Dockerfile",
-                "environment/policy-check.sh",
-                "environment/ptx-docs/README.md",
-                "environment/ptx-docs/manifest.toml",
+                "environment/docker-compose.yaml",
+                "environment/files/direct-ptx-policy-check",
+                "environment/files/setup.sh",
+                "environment/files/ptx-docs/README.md",
+                "environment/files/ptx-docs/manifest.toml",
                 "solution/solve.sh",
+                "tests/direct-ptx-policy-check",
+                "tests/ptx-docs-manifest.toml",
                 "tests/test.sh",
+                "tests/verify_hardware.py",
                 "tests/verify_and_benchmark.py",
             }
             self.assertTrue(expected.issubset({str(p.relative_to(task)) for p in task.rglob("*") if p.is_file()}))
@@ -58,7 +63,16 @@ class ScaffoldDirectPtxTaskTest(unittest.TestCase):
             self.assertEqual(config["task"]["name"], "ptx-bench/ptx-test-kernel")
             self.assertEqual(config["environment"]["network_mode"], "public")
             self.assertEqual(config["agent"]["network_mode"], "allowlist")
-            self.assertEqual(config["environment"]["gpu_types"], ["B200"])
+            self.assertNotIn("gpus", config["environment"])
+            self.assertNotIn("gpu_types", config["environment"])
+            self.assertEqual(config["metadata"]["required_gpus"], 1)
+            self.assertEqual(config["metadata"]["required_gpu_type"], "B200")
+            self.assertEqual(config["metadata"]["template_version"], "direct-ptx-v0.1")
+            self.assertEqual(config["metadata"]["implementation_status"], "scaffold")
+            self.assertEqual(
+                config["artifacts"],
+                [{"source": "/app/kernel.ptx", "destination": "kernel.ptx"}],
+            )
             self.assertEqual(
                 config["agent"]["allowed_hosts"],
                 ["models.internal.example"],
@@ -66,9 +80,25 @@ class ScaffoldDirectPtxTaskTest(unittest.TestCase):
             for path in task.rglob("*"):
                 if path.is_file():
                     self.assertNotIn("@@", path.read_text())
+            for relative in (
+                "tests/verify_hardware.py",
+                "tests/verify_and_benchmark.py",
+            ):
+                source_path = task / relative
+                compile(source_path.read_text(), str(source_path), "exec")
             self.assertTrue((task / "solution/solve.sh").stat().st_mode & 0o111)
             self.assertTrue((task / "tests/test.sh").stat().st_mode & 0o111)
-            self.assertTrue((task / "environment/policy-check.sh").stat().st_mode & 0o111)
+            self.assertTrue(
+                (task / "tests/direct-ptx-policy-check").stat().st_mode & 0o111
+            )
+            self.assertTrue(
+                (task / "environment/files/direct-ptx-policy-check").stat().st_mode
+                & 0o111
+            )
+            self.assertTrue(
+                (task / "environment/files/setup.sh").stat().st_mode & 0o111
+            )
+            self.assertTrue((task / "tests/verify_hardware.py").stat().st_mode & 0o111)
 
             check = subprocess.run(
                 [sys.executable, str(CHECKER), str(task)],
@@ -84,11 +114,45 @@ class ScaffoldDirectPtxTaskTest(unittest.TestCase):
             self.assertEqual(release_check.returncode, 1)
             self.assertIn("unresolved TODO", release_check.stderr)
 
-            document = task / "environment" / "ptx-docs" / "ptx-isa.txt"
+            candidate = task / "candidate.ptx"
+            candidate.write_text(
+                ".version 8.7\n.target sm_100\n.address_size 64\n"
+                ".visible .entry test_kernel() { ret; }\n"
+            )
+            metrics = task / "metrics.json"
+            reward = task / "reward.json"
+            fail_closed_verifier = subprocess.run(
+                [
+                    sys.executable,
+                    str(task / "tests/verify_and_benchmark.py"),
+                    "--candidate",
+                    str(candidate),
+                    "--log",
+                    str(metrics),
+                    "--reward",
+                    str(reward),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(fail_closed_verifier.returncode, 2)
+            self.assertEqual(json.loads(reward.read_text())["reward"], 0.0)
+            self.assertEqual(
+                json.loads(metrics.read_text())["status"], "infrastructure_error"
+            )
+            self.assertEqual(
+                json.loads(metrics.read_text())["error_type"], "NotImplementedError"
+            )
+
+            document = (
+                task / "environment" / "files" / "ptx-docs" / "ptx-isa.txt"
+            )
             document.write_text("Pinned PTX ISA test fixture.\n")
             digest = hashlib.sha256(document.read_bytes()).hexdigest()
-            manifest = task / "environment" / "ptx-docs" / "manifest.toml"
-            manifest.write_text(
+            runtime_manifest = (
+                task / "environment" / "files" / "ptx-docs" / "manifest.toml"
+            )
+            manifest_source = (
                 'schema_version = "1.0"\n'
                 'document_path = "ptx-isa.txt"\n'
                 'document_version = "test-version"\n'
@@ -96,6 +160,9 @@ class ScaffoldDirectPtxTaskTest(unittest.TestCase):
                 f'sha256 = "{digest}"\n'
                 'license = "test-only"\n'
             )
+            runtime_manifest.write_text(manifest_source)
+            hidden_manifest = task / "tests" / "ptx-docs-manifest.toml"
+            hidden_manifest.write_text(manifest_source)
             for path in task.rglob("*"):
                 if not path.is_file():
                     continue
@@ -106,29 +173,126 @@ class ScaffoldDirectPtxTaskTest(unittest.TestCase):
                 path.write_text(content.replace("TODO", "COMPLETED"))
             task_toml = task / "task.toml"
             task_toml.write_text(
-                task_toml.read_text().replace("release_ready = false", "release_ready = true")
+                task_toml.read_text()
+                .replace('implementation_status = "scaffold"', 'implementation_status = "implemented"')
+                .replace("release_ready = false", "release_ready = true")
             )
-            completed_release_check = subprocess.run(
+            incomplete_release_check = subprocess.run(
+                [sys.executable, str(CHECKER), str(task), "--release"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(incomplete_release_check.returncode, 1)
+            self.assertIn("scaffold implementation marker", incomplete_release_check.stderr)
+            self.assertIn("pinned by SHA-256 digest", incomplete_release_check.stderr)
+
+            dockerfile = task / "environment" / "Dockerfile"
+            dockerfile.write_text(
+                dockerfile.read_text().replace(
+                    "FROM nvidia/cuda:13.2.1-devel-ubuntu24.04",
+                    "FROM nvidia/cuda:13.2.1-devel-ubuntu24.04@sha256:" + "0" * 64,
+                )
+            )
+            oracle = task / "solution" / "solve.sh"
+            oracle.write_text(
+                "#!/bin/bash\nset -euo pipefail\n"
+                "printf '.visible .entry test_kernel() { ret; }\\n' > /app/kernel.ptx\n"
+            )
+            verifier_path = task / "tests" / "verify_and_benchmark.py"
+            verifier_source = verifier_path.read_text()
+            verifier_source = verifier_source.replace(
+                "# DIRECT_PTX_SCAFFOLD_UNIMPLEMENTED\n", ""
+            )
+            verifier_source = verifier_source.replace(
+                'raise NotImplementedError("task-specific correctness verifier is not implemented")',
+                "return None",
+            )
+            verifier_source = verifier_source.replace(
+                'raise NotImplementedError("task-specific performance protocol is not implemented")',
+                'return {"reward": 1.0, "performance": 1.0, "speedup_vs_reference": 1.0}',
+            )
+            verifier_path.write_text(verifier_source)
+
+            # This is deliberately only a structural completion fixture. A
+            # static checker cannot prove that a task-specific verifier is
+            # semantically correct; Oracle and negative Jobs provide that evidence.
+            structurally_completed_release_check = subprocess.run(
                 [sys.executable, str(CHECKER), str(task), "--release"],
                 capture_output=True,
                 text=True,
             )
             self.assertEqual(
-                completed_release_check.returncode,
+                structurally_completed_release_check.returncode,
                 0,
-                completed_release_check.stderr,
+                structurally_completed_release_check.stderr,
             )
 
-            split_phase_release_check = subprocess.run(
+            public_policy = (
+                task / "environment" / "files" / "direct-ptx-policy-check"
+            )
+            original_public_policy = public_policy.read_text()
+            public_policy.write_text(original_public_policy + "\n# tampered\n")
+            mismatched_policy_check = subprocess.run(
+                [sys.executable, str(CHECKER), str(task), "--release"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(mismatched_policy_check.returncode, 1)
+            self.assertIn(
+                "Agent-visible and hidden Direct-PTX policy checkers must match",
+                mismatched_policy_check.stderr,
+            )
+            public_policy.write_text(original_public_policy)
+
+            original_hidden_manifest = hidden_manifest.read_text()
+            hidden_manifest.write_text(
+                original_hidden_manifest.replace("test-version", "tampered-version")
+            )
+            mismatched_manifest_check = subprocess.run(
+                [sys.executable, str(CHECKER), str(task), "--release"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(mismatched_manifest_check.returncode, 1)
+            self.assertIn(
+                "runtime and hidden PTX documentation manifests must match",
+                mismatched_manifest_check.stderr,
+            )
+            hidden_manifest.write_text(original_hidden_manifest)
+
+            original_dockerfile = dockerfile.read_text()
+            dockerfile.write_text(
+                original_dockerfile
+                + "\nFROM ubuntu:24.04 AS unpinned-final-stage\n"
+            )
+            multistage_release_check = subprocess.run(
+                [sys.executable, str(CHECKER), str(task), "--release"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(multistage_release_check.returncode, 1)
+            self.assertIn(
+                "every environment/Dockerfile FROM image must be pinned",
+                multistage_release_check.stderr,
+            )
+            self.assertIn("FROM ubuntu:24.04", multistage_release_check.stderr)
+            dockerfile.write_text(
+                original_dockerfile
+                + "\nFROM ubuntu@sha256:"
+                + "1" * 64
+                + " AS pinned-final-stage\n"
+            )
+            pinned_multistage_release_check = subprocess.run(
                 [sys.executable, str(CHECKER), str(task), "--release"],
                 capture_output=True,
                 text=True,
             )
             self.assertEqual(
-                split_phase_release_check.returncode,
+                pinned_multistage_release_check.returncode,
                 0,
-                split_phase_release_check.stderr,
+                pinned_multistage_release_check.stderr,
             )
+            dockerfile.write_text(original_dockerfile)
 
             task_toml.write_text(
                 task_toml.read_text().replace(
@@ -149,13 +313,6 @@ class ScaffoldDirectPtxTaskTest(unittest.TestCase):
                 public_agent_release_check.stderr,
             )
 
-            candidate = task / "candidate.ptx"
-            candidate.write_text(
-                ".version 8.7\n.target sm_100\n.address_size 64\n"
-                ".visible .entry test_kernel() { ret; }\n"
-            )
-            metrics = task / "metrics.json"
-            reward = task / "reward.json"
             verifier = subprocess.run(
                 [
                     sys.executable,
@@ -170,11 +327,8 @@ class ScaffoldDirectPtxTaskTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(verifier.returncode, 1)
-            self.assertEqual(json.loads(reward.read_text())["reward"], 0.0)
-            self.assertEqual(
-                json.loads(metrics.read_text())["error_type"], "NotImplementedError"
-            )
+            self.assertEqual(verifier.returncode, 0)
+            self.assertEqual(json.loads(reward.read_text())["reward"], 1.0)
 
     def test_refuses_to_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

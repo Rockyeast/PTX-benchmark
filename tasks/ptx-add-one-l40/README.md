@@ -82,3 +82,6 @@ The Docker backend in Harbor 0.21.0 does not allocate a specific local GPU.
 `environment/docker-compose.yaml` therefore reads the host GPU index from
 `PTX_BENCH_GPU_DEVICE`. Set that variable to an idle L40 before starting the
 job.
+The verifier uploads its policy checker and pinned PTX-document manifest from
+`tests/` only after the Agent phase. Grading therefore does not trust a checker
+or manifest that the Agent could have modified inside the task environment.

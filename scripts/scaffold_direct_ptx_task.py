@@ -93,6 +93,7 @@ def replacements(args: argparse.Namespace) -> dict[str, str]:
         "@@HARDWARE_TARGET@@": args.hardware_target,
         "@@HARDWARE_TARGET_PY@@": repr(args.hardware_target),
         "@@HARDWARE_TARGET_TOML@@": toml_string(args.hardware_target),
+        "@@GPU_TYPE@@": args.gpu_type,
         "@@GPU_TYPE_TOML@@": toml_string(args.gpu_type),
         "@@GPU_KEYWORD_TOML@@": toml_string(args.gpu_type.lower()),
         "@@SM@@": args.sm,
@@ -120,9 +121,12 @@ def render_tree(destination: Path, values: dict[str, str]) -> None:
             raise RuntimeError(f"unresolved placeholders in {path}: {leftovers}")
         path.write_text(content)
     for relative in (
-        "environment/policy-check.sh",
+        "environment/files/direct-ptx-policy-check",
+        "environment/files/setup.sh",
         "solution/solve.sh",
+        "tests/direct-ptx-policy-check",
         "tests/test.sh",
+        "tests/verify_hardware.py",
         "tests/verify_and_benchmark.py",
     ):
         path = destination / relative
@@ -148,6 +152,8 @@ def main() -> int:
     print("Next: replace every TODO, align ABI across instruction/Oracle/verifier,")
     print("pin the local PTX documentation snapshot, then run the task checker,")
     print("Oracle, negative fixtures, and a real Agent in that order.")
+    print("Docker: export PTX_BENCH_GPU_DEVICE=<idle GPU index>")
+    print("Singularity: pass --override-gpus 1 and the validated SIF kwargs")
     print(f"Check: python3 scripts/check_direct_ptx_task.py {destination}")
     return 0
 

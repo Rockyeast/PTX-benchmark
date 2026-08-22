@@ -66,7 +66,7 @@ Validation completed:
 Use the image without putting its server-specific absolute path in `task.toml`:
 
 ```bash
---environment-type singularity \
+--env singularity \
 --environment-kwarg singularity_nv=true \
 --environment-kwarg singularity_image_path=/home/zhuominc/rockyeast-work/containers/ptx-bench-cuda13.2.1-ubuntu24.04-v1.sif
 ```
@@ -137,16 +137,59 @@ and NVVM, and retain `ptxas` for direct PTX syntax/resource checks. Task
 References are compiled once during task authoring and committed as hidden,
 digest-pinned `.ptx` files; the verifier no longer needs a CUDA C++ compiler.
 
-Build the Codex image on Catalyst with:
+Build the agent-neutral image on Catalyst with:
 
 ```bash
 APPTAINER_CACHEDIR=/tmp/zhuominc-ptx-apptainer-cache \
 APPTAINER_TMPDIR=/tmp/zhuominc-ptx-apptainer-tmp \
 timeout 7200 \
 apptainer build --fakeroot \
-  /home/zhuominc/rockyeast-work/containers/ptx-bench-direct-cuda13.2.1-codex0.148-ubuntu24.04-v1.sif \
+  /home/zhuominc/rockyeast-work/containers/ptx-bench-direct-cuda13.2.1-ubuntu24.04-v2.sif \
+  /home/zhuominc/rockyeast-work/PTX-benchmark/images/ptx-bench-direct-cuda13.2.def
+```
+
+Build the Codex-specific image with:
+
+```bash
+APPTAINER_CACHEDIR=/tmp/zhuominc-ptx-apptainer-cache \
+APPTAINER_TMPDIR=/tmp/zhuominc-ptx-apptainer-tmp \
+timeout 7200 \
+apptainer build --fakeroot \
+  /home/zhuominc/rockyeast-work/containers/ptx-bench-direct-cuda13.2.1-codex0.148-ubuntu24.04-v2.sif \
   /home/zhuominc/rockyeast-work/PTX-benchmark/images/ptx-bench-direct-codex0.148.def
 ```
+
+The v2 definitions add `pdftotext` and remove every remaining NVRTC/NVVM
+component discovered under `/usr/local/cuda`. A generated v0 task supplies its
+pinned PTX documentation and policy checker through `environment/files/`:
+Docker copies those files while building, and Harbor's Singularity bootstrap
+injects the same files into its writable overlay. The generic SIF therefore
+remains reusable across tasks rather than embedding one task's documentation.
+
+The agent-neutral v2 image was built and smoke-tested on `catalyst-b200` on
+2026-08-21. The older v1 image was preserved rather than overwritten:
+
+```text
+Path:   /home/zhuominc/rockyeast-work/containers/ptx-bench-direct-cuda13.2.1-ubuntu24.04-v2.sif
+Size:   3.3 GiB
+SHA256: d09310817f2322332be6cffa831b2f677b855c6cd78bd91258d318e6e6bdd279
+```
+
+Validation completed:
+
+- the definition `%test` passed for `ptxas`, `cuobjdump`, `pdftotext`, and the
+  NVRTC/NVVM absence checks;
+- task `environment/files/` was mounted and `setup.sh` installed the shared
+  policy/doc assets into the writable overlay;
+- the runtime policy checker passed both during direct SIF smoke and Harbor
+  bootstrap;
+- Harbor allocated physical GPU 0, ran the add-one Oracle and verifier, and
+  returned reward `1.0` with no exception in 16 seconds;
+- the validation Job is retained on Catalyst at
+  `/tmp/ptx-cross-backend-jobs/ptx-add-one-cross-backend-v2-oracle`.
+
+The Codex-specific v2 definition has not yet been rebuilt or runtime-tested;
+continue treating its v1 artifact as the last validated Codex-specific SIF.
 
 Because Codex still requires network access to call the model API, removing
 local compiler binaries is not a hermetic proof that no compiler was
@@ -154,7 +197,7 @@ downloaded. Direct-PTX release runs must also retain and audit the Agent
 trajectory, and should add egress allowlisting when the infrastructure supports
 it.
 
-The Codex direct-PTX image was built and tested on `catalyst-b200` on
+The Codex direct-PTX v1 image was built and tested on `catalyst-b200` on
 2026-08-20:
 
 ```text

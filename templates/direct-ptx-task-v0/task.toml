@@ -1,5 +1,7 @@
 schema_version = "1.4"
-artifacts = []
+artifacts = [
+  { source = "/app/kernel.ptx", destination = "kernel.ptx" },
+]
 
 [task]
 name = "ptx-bench/@@TASK_SLUG@@"
@@ -10,11 +12,15 @@ keywords = ["ptx", "cuda", @@GPU_KEYWORD_TOML@@, "direct-ptx"]
 
 [metadata]
 benchmark_setting = "direct-ptx"
-template_version = "direct-ptx-v0"
+template_version = "direct-ptx-v0.1"
 hardware_target = @@HARDWARE_TARGET_TOML@@
 ptx_docs_path = "/opt/ptx-docs"
 ptx_validation_tools = ["ptxas", "cuobjdump"]
+documentation_tools = ["pdftotext"]
 prohibited_high_level_toolchains = ["nvcc", "NVRTC", "NVVM", "Triton"]
+required_gpus = 1
+required_gpu_type = @@GPU_TYPE_TOML@@
+implementation_status = "scaffold"
 release_ready = false
 
 [verifier]
@@ -34,8 +40,6 @@ network_mode = "@@NETWORK_MODE@@"
 network_mode = "public"
 build_timeout_sec = 900.0
 os = "linux"
-gpus = 1
-gpu_types = [@@GPU_TYPE_TOML@@]
 mcp_servers = []
 
 [environment.env]
