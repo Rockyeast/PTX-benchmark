@@ -17,3 +17,7 @@ digest = "sha256:16fef24303252528983b1c32523b135bb43580d6b19e2786069224d47bc3a53
 name = "ptx-bench/ptx-vector-add"
 digest = "sha256:eecf182c12996ad29a9eaa7e5c54164158db1b9527346037788016501793eee9"
 
+[[tasks]]
+name = "ptx-bench/ptx-rope-forward-bf16-d128"
+digest = "sha256:937b3c37ca4b60df262a869fbd1dfa0b92a4f9ab306d3c4f4d6b83aa596861ea"
+

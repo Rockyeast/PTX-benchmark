@@ -1,0 +1,122 @@
+.version 9.2
+.target sm_100
+.address_size 64
+
+.visible .entry rope_forward_bf16_d128(
+    .param .u64 q_ptr,
+    .param .u64 k_ptr,
+    .param .u64 positions_ptr,
+    .param .u64 cache_ptr,
+    .param .u64 q_out_ptr,
+    .param .u64 k_out_ptr,
+    .param .u32 num_tokens
+)
+.maxntid 256, 1, 1
+{
+    .reg .pred %p<4>;
+    .reg .b16 %h<5>;
+    .reg .b32 %r<12>;
+    .reg .b64 %rd<24>;
+    .reg .f32 %f<9>;
+
+    ld.param.u64 %rd0, [q_ptr];
+    ld.param.u64 %rd1, [k_ptr];
+    ld.param.u64 %rd2, [positions_ptr];
+    ld.param.u64 %rd3, [cache_ptr];
+    ld.param.u64 %rd4, [q_out_ptr];
+    ld.param.u64 %rd5, [k_out_ptr];
+    ld.param.u32 %r0, [num_tokens];
+
+    mov.u32 %r1, %ctaid.x;
+    setp.ge.u32 %p0, %r1, %r0;
+    @%p0 bra DONE;
+
+    mul.wide.u32 %rd6, %r1, 4;
+    add.u64 %rd7, %rd2, %rd6;
+    ld.global.u32 %r2, [%rd7];
+    mul.wide.u32 %rd8, %r2, 512;
+    add.u64 %rd9, %rd3, %rd8;
+
+    mul.wide.u32 %rd10, %r1, 8192;
+    add.u64 %rd11, %rd0, %rd10;
+    add.u64 %rd12, %rd4, %rd10;
+
+    mov.u32 %r3, %tid.x;
+    mov.u32 %r4, %ntid.x;
+    mov.u32 %r5, %r3;
+
+Q_LOOP:
+    setp.ge.u32 %p1, %r5, 2048;
+    @%p1 bra K_SETUP;
+
+    shr.u32 %r6, %r5, 6;
+    and.b32 %r7, %r5, 63;
+    shl.b32 %r8, %r6, 7;
+    add.u32 %r9, %r8, %r7;
+    mul.wide.u32 %rd13, %r9, 2;
+    add.u64 %rd14, %rd11, %rd13;
+    add.u64 %rd15, %rd12, %rd13;
+    bra ROTATE_Q;
+
+Q_CONTINUE:
+    add.u32 %r5, %r5, %r4;
+    bra Q_LOOP;
+
+K_SETUP:
+    mul.wide.u32 %rd16, %r1, 2048;
+    add.u64 %rd17, %rd1, %rd16;
+    add.u64 %rd18, %rd5, %rd16;
+    mov.u32 %r5, %r3;
+
+K_LOOP:
+    setp.ge.u32 %p2, %r5, 512;
+    @%p2 bra DONE;
+
+    shr.u32 %r6, %r5, 6;
+    and.b32 %r7, %r5, 63;
+    shl.b32 %r8, %r6, 7;
+    add.u32 %r9, %r8, %r7;
+    mul.wide.u32 %rd13, %r9, 2;
+    add.u64 %rd14, %rd17, %rd13;
+    add.u64 %rd15, %rd18, %rd13;
+    bra ROTATE_K;
+
+K_CONTINUE:
+    add.u32 %r5, %r5, %r4;
+    bra K_LOOP;
+
+ROTATE_Q:
+    mov.u32 %r10, 0;
+    bra ROTATE;
+
+ROTATE_K:
+    mov.u32 %r10, 1;
+
+ROTATE:
+    mul.wide.u32 %rd19, %r7, 4;
+    add.u64 %rd20, %rd9, %rd19;
+    ld.global.f32 %f0, [%rd20];
+    ld.global.f32 %f1, [%rd20+256];
+
+    ld.global.b16 %h0, [%rd14];
+    ld.global.b16 %h1, [%rd14+128];
+    cvt.f32.bf16 %f2, %h0;
+    cvt.f32.bf16 %f3, %h1;
+    mul.f32 %f4, %f2, %f0;
+    mul.f32 %f5, %f3, %f1;
+    sub.f32 %f6, %f4, %f5;
+    mul.f32 %f4, %f3, %f0;
+    mul.f32 %f5, %f2, %f1;
+    add.f32 %f7, %f4, %f5;
+    cvt.rn.bf16.f32 %h2, %f6;
+    cvt.rn.bf16.f32 %h3, %f7;
+    st.global.b16 [%rd15], %h2;
+    st.global.b16 [%rd15+128], %h3;
+
+    setp.eq.u32 %p3, %r10, 0;
+    @%p3 bra Q_CONTINUE;
+    bra K_CONTINUE;
+
+DONE:
+    ret;
+}

@@ -1,0 +1,11 @@
+services:
+  main:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids:
+                - "${PTX_BENCH_GPU_DEVICE:?set PTX_BENCH_GPU_DEVICE to an idle B200 index}"
+              capabilities:
+                - gpu

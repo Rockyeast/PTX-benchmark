@@ -87,7 +87,7 @@ RMSNorm × forward/plain × BF16/contiguous × B200 × N=4096
 
 `vector_add`、`add_one` 等只用于基础设施和评分校准，不计入最终家族覆盖率。
 
-50～100 道是后续规模目标，不是现在就要填满的数字。先完成五道 pilot，确认 task
+50～100 道是后续规模目标，不是现在就要填满的数字。先完成十道 pilot 候选，确认 task
 粒度、Reference 适配成本和模型得分分布，再决定每个家族的数量。
 
 ## 5. 难度层级
@@ -165,7 +165,7 @@ direct-PTX
 
 1. 保留 `vector_add` 作为 C0 校准题；
 2. 将 RMSNorm 从 feasibility 推进到 agent-calibrated；
-3. 按 [`task-catalog.md`](task-catalog.md) 依次完成五道 pilot；
+3. 按 [`task-catalog.md`](task-catalog.md) 依次完成十道 pilot 候选；
 4. 检查不同家族的实现成本、耗时和模型分布；
 5. 用 [`../task-authoring-template.md`](../task-authoring-template.md) 的 v0 模板完成
    不同家族 pilot，再冻结统一 task authoring v1 模板和 release gate；

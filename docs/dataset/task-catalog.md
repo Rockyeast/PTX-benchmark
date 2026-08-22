@@ -1,6 +1,6 @@
 # PTX-Benchmark 题目目录
 
-**状态：Draft v0.1（2026-08-20）。候选题不等于已经进入正式数据集。**
+**状态：Draft v0.2（2026-08-21）。候选题不等于已经进入正式数据集。**
 
 ## 1. 状态说明
 
@@ -9,6 +9,7 @@
 | infrastructure | 只验证 Harbor/GPU，不计入 benchmark |
 | calibration | 校准 correctness/performance 管线，不计入最终总分 |
 | selected | 已选入 pilot，但尚未写规格 |
+| specified | 规格、ABI 和测试边界已有草案，但尚未在目标 GPU 跑通 |
 | feasibility | ABI 和最小 Oracle 已在目标 GPU 跑通 |
 | validated | 正负例、Reference 和重复测量完成 |
 | calibrated | 多个真实 Agent/模型已运行 |
@@ -25,19 +26,29 @@
 
 RMSNorm 是第一道正式题候选，但仍缺 INT21 外部性能对照、负例和多 Agent 校准。
 
-## 3. 第一批五道 pilot
+## 3. 第一批十道 pilot 候选
+
+第一版先用 10 道题形成较稳定的正确率分母。当前临时难度目标是：在统一的
+`GPT-5.6 Sol + Codex + reasoning_effort=high` 配置下，整组 task 的 correctness
+通过率约为 30%～50%。这是选题假设，不是已经得到的实验结论；正式冻结仍要运行
+Kimi K3、GLM 等开放权重模型。
 
 | 顺序 | 暂定 Task | 专门化边界 | 家族/难度 | 正确性真值 | 性能来源候选 | 状态 |
 |---:|---|---|---|---|---|---|
-| P1 | `rmsnorm-forward-bf16-n4096` | plain forward，BF16，FP32 weight，N=4096 | A / D2 | 独立 PyTorch/CPU 公式 | INT21 RMSNorm-B200 + 同 ABI Reference | feasibility |
-| P2 | `rope-forward-bf16-d128` | LLaMA-style RoPE，BF16，head_dim=128 | C / D2 | PyTorch sin/cos 公式 | FlashInfer RoPE | selected |
-| P3 | `fp8-rowwise-quant-e4m3` | BF16 → FP8 E4M3 + row scale，shape 待冻结 | D / D2-D3 | CPU/PyTorch quant 规则 | FlashInfer/CUTLASS 低精度实现 | selected |
-| P4 | `gemm-bf16-fixed` | BF16×BF16→FP32/BF16，固定 B200 shape family | D / D3 | CPU/PyTorch matmul | NVIDIA CUTLASS BF16 GEMM | selected |
-| P5 | `flash-attention-forward-bf16-d128` | causal forward，BF16，head_dim=128，shape 待冻结 | E / D4 | PyTorch SDPA 数学参考 | FlashInfer / FlashAttention | selected |
+| P1 | `rmsnorm-forward-bf16-n4096` | plain forward，BF16，FP32 weight，N=4096 | A / D2 | 独立 CPU/PyTorch 公式 | INT21 RMSNorm-B200 | feasibility |
+| P2 | `rope-forward-bf16-d128` | NeoX RoPE，BF16，head_dim=128，Q/K 融合 | C / D2 | 独立 CPU/Python FP32/BF16 公式 | FlashInfer RoPE | feasibility |
+| P3 | `silu-gate-forward-bf16-n4096` | `silu(gate) * up`，BF16，N=4096 | B / D1 | 独立 CPU/PyTorch 公式 | FlashInfer fused activation | selected |
+| P4 | `softmax-forward-bf16-n4096` | row-wise forward，BF16，N=4096 | A / D2 | 稳定 FP32 softmax 公式 | FlashInfer / CUDA Reference | selected |
+| P5 | `kv-cache-append-bf16-d128` | paged K/V append，BF16，head_dim=128 | C / D2 | 独立索引与拷贝公式 | FlashInfer paged KV API | selected |
+| P6 | `fp8-rowwise-quant-e4m3` | BF16 → FP8 E4M3 + row scale，shape 待冻结 | D / D2-D3 | 独立量化与反量化规则 | FlashInfer / CUTLASS | selected |
+| P7 | `moe-top2-routing-bf16-e128` | 每 token 选 2 个 expert，E=128 | F / D3 | 独立 stable top-2 + weight 公式 | FlashInfer / serving routing | selected |
+| P8 | `gemm-bf16-fixed` | BF16×BF16→FP32/BF16，固定 B200 shape | D / D3 | 独立 CPU/PyTorch matmul | NVIDIA CUTLASS Blackwell GEMM | selected |
+| P9 | `flash-attention-forward-bf16-d128` | causal forward，BF16，head_dim=128 | E / D4 | 独立 FP32 attention 公式 | FlashInfer / FlashAttention | selected |
+| P10 | `paged-decode-attention-bf16-d128` | GQA decode，paged KV，BF16，head_dim=128 | E / D4 | 独立 FP32 attention + page gather | FlashInfer / CUTLASS GQA | selected |
 
-这个顺序故意逐步增加风险：先做索引/向量化，再做低精度，再进入 Tensor Core 和
-attention。P2 是下一道最合适的 task；它能验证“从现有 task 模板复制新题”的能力，
-但不会立即陷入 GEMM/Attention 的复杂 host ABI。
+家族数量为 `A:2, B:1, C:2, D:2, E:2, F:1`。P3 提供相对容易但仍有融合和特殊函数
+意义的锚点；P8～P10 则故意保留 Tensor Core、online softmax 和 paged metadata 等
+高难能力。预期分布必须由真实 Agent 重复运行验证，不能只凭 D1～D4 标签认定。
 
 ## 4. 第二批候选池
 
@@ -46,10 +57,7 @@ attention。P2 是下一道最合适的 task；它能验证“从现有 task 模
 | 候选 | 家族 | 主要价值 | 当前阻塞/注意点 |
 |---|---|---|---|
 | LayerNorm forward/backward | A | reduction、均值与方差 | 与 RMSNorm 重复度要控制 |
-| fused SiLU-gate / GELU | B | 融合与特殊函数 | 可能过易，需看模型分布 |
-| KV-cache append / layout transform | C | 真实 serving 数据移动 | layout 与 paged metadata 需冻结 |
 | FP8 / NVFP4 GEMM | D | Blackwell 低精度 Tensor Core | scale 格式、TMA descriptor 和 Reference 较复杂 |
-| paged decode attention | E | 真实 serving 核心路径 | 单 entry ABI 很大，先在 P5 后评估 |
 | KDA recurrent decode | E | 现代 state-space/attention hybrid | 官方 B200 实现有 host dispatch 和七条 kernel 路径，不适合直接塞进当前单-entry格式 |
 | grouped GEMM / fused MoE | F | expert routing 与不规则工作量 | 需要 workspace 和多输出契约 |
 | Top-K / Top-P sampling | F | 非规则选择与概率语义 | 随机性、确定性和统计正确性需单独设计 |
@@ -67,5 +75,7 @@ attention。P2 是下一道最合适的 task；它能验证“从现有 task 模
 
 ## 6. 下一步
 
-只推进 P2 RoPE 的“来源审阅 + 规格文档”，暂不 scaffold。RMSNorm 保持 feasibility
-状态，等五道 pilot 的共同结构清楚后，再统一补齐负例和真实 Agent 校准。
+P2 RoPE 已完成 B200 Oracle feasibility 和两个安全负例检查。下一步为 P3 SiLU-gate
+做来源审阅和规格草案，暂不同时 scaffold P4～P10；同时保留 P1 RMSNorm、P2 RoPE 的
+剩余负例、重复计时和 Agent 校准。等前三道正式候选暴露出共同的 ABI、Reference 和
+verifier 问题后，再冻结模板并继续扩展。

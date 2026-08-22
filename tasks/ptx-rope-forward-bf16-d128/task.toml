@@ -1,0 +1,44 @@
+schema_version = "1.4"
+artifacts = [
+  { source = "/app/kernel.ptx", destination = "kernel.ptx" },
+]
+
+[task]
+name = "ptx-bench/ptx-rope-forward-bf16-d128"
+version = "1.0.0"
+description = "Implement and benchmark a BF16 NeoX-style RoPE forward PTX kernel specialized for head dimension 128 on NVIDIA B200."
+authors = []
+keywords = ["ptx", "cuda", "b200", "rope", "bf16", "position-embedding", "performance"]
+
+[metadata]
+benchmark_setting = "direct-ptx"
+template_version = "direct-ptx-v0.1"
+hardware_target = "NVIDIA B200"
+ptx_docs_path = "/opt/ptx-docs"
+ptx_validation_tools = ["ptxas", "cuobjdump"]
+documentation_tools = ["pdftotext"]
+prohibited_high_level_toolchains = ["nvcc", "NVRTC", "NVVM", "Triton"]
+required_gpus = 1
+required_gpu_type = "B200"
+implementation_status = "implemented"
+release_ready = false
+
+[verifier]
+timeout_sec = 180.0
+collect = []
+
+[verifier.env]
+
+[agent]
+timeout_sec = 600.0
+network_mode = "no-network"
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 900.0
+os = "linux"
+mcp_servers = []
+
+[environment.env]
+
+[solution.env]
