@@ -50,29 +50,18 @@ scripts/lovelace/qwen38-vllm.sh status
 scripts/lovelace/qwen38-vllm.sh health
 scripts/lovelace/qwen38-vllm.sh logs
 scripts/lovelace/qwen38-vllm.sh stop
-scripts/lovelace/qwen38-vllm.sh rotate-key
 ```
 
 脚本第一次启动时会：
 
 1. 确认目标 GPU 没有计算进程且显存占用不超过 1 GiB；
 2. 确认 8022 端口空闲；
-3. 创建权限为 0600 的 API key 文件；
-4. 拉取固定版本 vLLM image；
-5. 创建持久 Docker volume 并下载固定 revision 的模型；
-6. 启动 OpenAI-compatible API。
+3. 拉取固定版本 vLLM image；
+4. 创建持久 Docker volume 并下载固定 revision 的模型；
+5. 启动不启用 API 鉴权的 OpenAI-compatible API。
 
-API key 只保存在远端：
-
-```text
-~/.config/ptx-bench/qwen38-api-key
-```
-
-不要把 key 写入 Git、任务目录或 job 结果。
-
-轮换 key 必须使用 `rotate-key`。API key 是 vLLM 容器的启动参数，只修改 key 文件
-再重启旧容器不会生效；`rotate-key` 会删除旧容器配置、保留两个缓存 volume，并用
-新 key 重建服务。
+该原型服务不设置 API key。任何能够访问 Lovelace 8022 端口的用户都可以调用它，
+因此仍需依靠 CMU 内网/VPN 边界和团队资源协调，避免并发请求影响实验。
 
 ## Harbor 接口
 
@@ -82,8 +71,11 @@ API key 只保存在远端：
 agent: qwen-coder
 model: openai/qwen3.8-27b-fp8
 OPENAI_BASE_URL: http://lovelace.ece.local.cmu.edu:8022/v1
-OPENAI_API_KEY: 远端 key 文件中的值
+OPENAI_API_KEY: unused
 ```
+
+`qwen-coder` 客户端要求 `OPENAI_API_KEY` 环境变量存在，因此使用固定占位值
+`unused`；vLLM 不验证它，它不是密码。
 
 先运行 `tasks/harbor-smoke/`。该运行只证明“Harbor -> Qwen Agent -> task output ->
 verifier”链路可用，不产生正式 PTX benchmark 分数。

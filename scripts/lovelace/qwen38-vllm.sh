@@ -16,11 +16,10 @@ GPU_MEMORY_UTILIZATION="${QWEN_GPU_MEMORY_UTILIZATION:-0.90}"
 ENABLE_THINKING="${QWEN_ENABLE_THINKING:-false}"
 CACHE_VOLUME="${QWEN_CACHE_VOLUME:-ptx-bench-qwen38-hf-cache}"
 VLLM_CACHE_VOLUME="${QWEN_VLLM_CACHE_VOLUME:-ptx-bench-qwen38-vllm-cache}"
-API_KEY_FILE="${QWEN_API_KEY_FILE:-${HOME}/.config/ptx-bench/qwen38-api-key}"
 
 usage() {
     cat <<'EOF'
-Usage: qwen38-vllm.sh {start|stop|status|logs|health|rotate-key}
+Usage: qwen38-vllm.sh {start|stop|status|logs|health}
 
 Environment overrides:
   QWEN_GPU_INDEX                 GPU index, default: 2
@@ -30,7 +29,6 @@ Environment overrides:
   QWEN_MAX_NUM_SEQS              concurrent sequences, default: 1
   QWEN_GPU_MEMORY_UTILIZATION    vLLM GPU fraction, default: 0.90
   QWEN_ENABLE_THINKING           default chat-template thinking mode, default: false
-  QWEN_API_KEY_FILE              secret file path
 EOF
 }
 
@@ -47,16 +45,6 @@ container_exists() {
 
 container_running() {
     [ "$(docker container inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null || true)" = "true" ]
-}
-
-ensure_api_key() {
-    if [ ! -s "${API_KEY_FILE}" ]; then
-        umask 077
-        mkdir -p "$(dirname "${API_KEY_FILE}")"
-        openssl rand -hex 32 > "${API_KEY_FILE}"
-        chmod 600 "${API_KEY_FILE}"
-        echo "Created API key file: ${API_KEY_FILE}"
-    fi
 }
 
 check_gpu_free() {
@@ -82,7 +70,6 @@ check_port_free() {
 start_server() {
     require_command docker
     require_command nvidia-smi
-    require_command openssl
     require_command ss
 
     if container_running; then
@@ -92,7 +79,6 @@ start_server() {
 
     check_gpu_free
     check_port_free
-    ensure_api_key
 
     if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
         docker pull "${IMAGE}"
@@ -104,9 +90,6 @@ start_server() {
     if container_exists; then
         docker start "${CONTAINER_NAME}" >/dev/null
     else
-        local api_key
-        api_key="$(tr -d '\r\n' < "${API_KEY_FILE}")"
-
         docker run -d \
             --name "${CONTAINER_NAME}" \
             --gpus "device=${GPU_INDEX}" \
@@ -130,8 +113,7 @@ start_server() {
             --default-chat-template-kwargs "{\"enable_thinking\": ${ENABLE_THINKING}}" \
             --reasoning-parser qwen3 \
             --enable-auto-tool-choice \
-            --tool-call-parser qwen3_xml \
-            --api-key "${api_key}" >/dev/null
+            --tool-call-parser qwen3_xml >/dev/null
     fi
 
     echo "Started ${CONTAINER_NAME} on GPU ${GPU_INDEX}, port ${HOST_PORT}"
@@ -160,46 +142,14 @@ show_status() {
 
 show_logs() {
     require_command docker
-    docker logs --tail 200 -f "${CONTAINER_NAME}" 2>&1 \
-        | sed -E 's/[0-9a-f]{64}/[REDACTED_API_KEY]/g'
+    docker logs --tail 200 -f "${CONTAINER_NAME}" 2>&1
 }
 
 health_check() {
     require_command curl
-    if [ ! -s "${API_KEY_FILE}" ]; then
-        echo "API key file not found: ${API_KEY_FILE}" >&2
-        exit 1
-    fi
-
     curl --fail --silent --show-error \
-        -H "Authorization: Bearer $(tr -d '\r\n' < "${API_KEY_FILE}")" \
         "http://127.0.0.1:${HOST_PORT}/v1/models"
     printf '\n'
-}
-
-rotate_api_key() {
-    require_command docker
-    require_command openssl
-
-    if container_running; then
-        docker stop --time 30 "${CONTAINER_NAME}" >/dev/null
-    fi
-    if container_exists; then
-        docker rm "${CONTAINER_NAME}" >/dev/null
-    fi
-
-    local key_dir
-    local temporary_key
-    key_dir="$(dirname "${API_KEY_FILE}")"
-    mkdir -p "${key_dir}"
-    chmod 700 "${key_dir}"
-    temporary_key="$(mktemp "${API_KEY_FILE}.tmp.XXXXXX")"
-    chmod 600 "${temporary_key}"
-    openssl rand -hex 32 > "${temporary_key}"
-    mv "${temporary_key}" "${API_KEY_FILE}"
-
-    echo "Rotated API key and removed the old container configuration."
-    start_server
 }
 
 case "${1:-}" in
@@ -217,9 +167,6 @@ case "${1:-}" in
         ;;
     health)
         health_check
-        ;;
-    rotate-key)
-        rotate_api_key
         ;;
     *)
         usage
