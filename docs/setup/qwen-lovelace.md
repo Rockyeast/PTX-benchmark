@@ -17,7 +17,8 @@ HTTP API 调用它。
 | Context | 131072 tokens |
 | Concurrent sequences | 1 |
 | Default thinking mode | disabled |
-| Host port | 8022 |
+| Host binding | Docker bridge gateway only (`10.100.0.1:8022` on Lovelace) |
+| API authentication | enabled; key stored outside the repository |
 | Tool parser | `qwen3_xml` |
 | Reasoning parser | `qwen3` |
 
@@ -48,20 +49,36 @@ context、Agent scaffold、采样参数、时间预算和量化策略。
 scripts/lovelace/qwen38-vllm.sh start
 scripts/lovelace/qwen38-vllm.sh status
 scripts/lovelace/qwen38-vllm.sh health
+scripts/lovelace/qwen38-vllm.sh audit
 scripts/lovelace/qwen38-vllm.sh logs
 scripts/lovelace/qwen38-vllm.sh stop
+scripts/lovelace/qwen38-vllm.sh rotate-key
 ```
 
 脚本第一次启动时会：
 
 1. 确认目标 GPU 没有计算进程且显存占用不超过 1 GiB；
-2. 确认 8022 端口空闲；
-3. 拉取固定版本 vLLM image；
-4. 创建持久 Docker volume 并下载固定 revision 的模型；
-5. 启动不启用 API 鉴权的 OpenAI-compatible API。
+2. 将宿主端口只绑定到 Docker bridge gateway，不绑定物理网卡；
+3. 创建权限为 `0600` 的 API key 和 Harbor env 文件；
+4. 拉取固定版本 vLLM image；
+5. 创建持久 Docker volume 并下载固定 revision 的模型；
+6. 重建容器并启动需要认证的 OpenAI-compatible API；
+7. `audit` 验证私有绑定、未认证请求被拒绝、key 不在容器 argv 中。
 
-该原型服务不设置 API key。任何能够访问 Lovelace 8022 端口的用户都可以调用它，
-因此仍需依靠 CMU 内网/VPN 边界和团队资源协调，避免并发请求影响实验。
+远端凭据只保存在：
+
+```text
+~/.config/ptx-bench/qwen38-api-key
+~/.config/ptx-bench/qwen38-harbor.env
+```
+
+两个文件均必须保持 `0600`，不能提交到 Git 或复制到 Job 目录。服务通过只读 secret
+mount 读取 key，key 不作为容器命令行参数。脚本不会复用已经停止的旧容器，而是重建
+容器，防止旧的 `0.0.0.0` 绑定或旧 key 继续生效。
+
+`--api-key` 不能代替网络隔离：vLLM 的部分非 OpenAI-compatible endpoint 不受该
+认证保护。因此默认服务只允许本机 Docker bridge 上的 Harbor egress 访问，CMU
+物理网卡和 VPN 客户端均不能直接连接 8022。
 
 ## Harbor 接口
 
@@ -70,12 +87,29 @@ scripts/lovelace/qwen38-vllm.sh stop
 ```text
 agent: qwen-coder
 model: openai/qwen3.8-27b-fp8
-OPENAI_BASE_URL: http://lovelace.ece.local.cmu.edu:8022/v1
-OPENAI_API_KEY: unused
+OPENAI_BASE_URL: http://10.100.0.1:8022/v1
+OPENAI_API_KEY: 由 ~/.config/ptx-bench/qwen38-harbor.env 注入
 ```
 
-`qwen-coder` 客户端要求 `OPENAI_API_KEY` 环境变量存在，因此使用固定占位值
-`unused`；vLLM 不验证它，它不是密码。
+不要把 key 展开到 shell 命令行。Harbor 0.21 可以先通过 `--env-file` 将 secret
+加载到宿主环境，再让 Agent env 使用变量模板；持久化 Job config 会保留模板而不是
+明文 secret：
+
+```bash
+harbor run \
+  --env-file ~/.config/ptx-bench/qwen38-harbor.env \
+  --agent-env 'OPENAI_API_KEY=${OPENAI_API_KEY}' \
+  --agent-env 'OPENAI_BASE_URL=${OPENAI_BASE_URL}' \
+  --path tasks/harbor-smoke \
+  --agent qwen-coder \
+  --model openai/qwen3.8-27b-fp8 \
+  --n-concurrent 1 \
+  --yes
+```
+
+L40 task 的 Agent allowlist 使用 `10.100.0.1`，不再允许
+`lovelace.ece.local.cmu.edu`。若确实需要从其他机器调试，应临时使用 SSH tunnel，
+不能重新绑定 `0.0.0.0`。
 
 先运行 `tasks/harbor-smoke/`。该运行只证明“Harbor -> Qwen Agent -> task output ->
 verifier”链路可用，不产生正式 PTX benchmark 分数。

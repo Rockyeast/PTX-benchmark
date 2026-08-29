@@ -188,6 +188,19 @@ Validation completed:
 - the validation Job is retained on Catalyst at
   `/tmp/ptx-cross-backend-jobs/ptx-add-one-cross-backend-v2-oracle`.
 
+The Codex-specific v2 image was built on 2026-08-22 from the pinned Codex
+0.148.0 base and passed its `%test` block:
+
+```text
+Path:   /home/zhuominc/rockyeast-work/containers/
+        ptx-bench-direct-cuda13.2.1-codex0.148-ubuntu24.04-v2.sif
+SHA256: 475016c4e67018326cae47ef7b8badeb9f9ecd895a206dc77718f99bc9c30edc
+```
+
+The v2 build removes NVRTC/NVVM stubs as well as runtime libraries. Policy
+checks must follow `/usr/local/cuda` symlinks with `find -L`; otherwise a
+residual stub can be missed even though the NVRTC runtime itself is absent.
+
 The Codex-specific v2 definition has not yet been rebuilt or runtime-tested;
 continue treating its v1 artifact as the last validated Codex-specific SIF.
 

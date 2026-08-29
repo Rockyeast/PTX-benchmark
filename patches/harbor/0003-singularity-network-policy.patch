@@ -1,0 +1,676 @@
+diff --git a/src/harbor/environments/singularity/README.md b/src/harbor/environments/singularity/README.md
+index 28c9baad..4f03ef4a 100644
+--- a/src/harbor/environments/singularity/README.md
++++ b/src/harbor/environments/singularity/README.md
+@@ -62,5 +62,6 @@ docker_image = "/path/to/image.sif"    # used directly
+ - **Memory watchdog** — Monitors process tree memory (PSS) with adaptive polling and kills the container at 95% of the configured limit.
+ - **Port collision retry** — Reserves ports and retries on collision since Singularity shares the host network namespace.
+ - **Per-trial GPU leases** — Concurrent trials reserve distinct idle physical GPUs, verify CUDA context creation, and expose only their reservation through `CUDA_VISIBLE_DEVICES`.
++- **Phase-scoped egress** — Agent commands run in an unprivileged network namespace. `no-network` has loopback only; `allowlist` can reach only a host-side CONNECT proxy that validates configured Harbor hostnames.
+ - **Bootstrap isolation** — Server dependencies are installed in `/opt/harbor-server` venv, separate from the task's Python environment.
+ - **Overlay compatibility** — Handles dpkg cross-device rename issues on Singularity's writable-tmpfs overlay.
+diff --git a/src/harbor/environments/singularity/network_guard.py b/src/harbor/environments/singularity/network_guard.py
+new file mode 100644
+index 00000000..a1738d49
+--- /dev/null
++++ b/src/harbor/environments/singularity/network_guard.py
+@@ -0,0 +1,324 @@
++"""Network namespace helpers for phase-scoped Singularity egress policy.
++
++The host-side ``proxy`` mode owns the only public-network socket.  The
++container-side ``bridge`` mode runs inside an unshared network namespace and
++forwards localhost HTTP CONNECT traffic over a Unix socket to that proxy.
++``isolated`` runs a command with loopback only and no egress bridge.
++"""
++
++from __future__ import annotations
++
++import argparse
++import asyncio
++import fcntl
++import json
++import os
++import signal
++import socket
++import struct
++from pathlib import Path
++from typing import Iterable, Optional, Sequence, Tuple
++
++
++_MAX_HEADER_BYTES = 64 * 1024
++_SIOCGIFFLAGS = 0x8913
++_SIOCSIFFLAGS = 0x8914
++_IFF_UP = 0x1
++_IFF_RUNNING = 0x40
++
++
++def normalize_hostname(hostname: str) -> str:
++    """Return a comparison-safe ASCII hostname."""
++    normalized = hostname.strip().rstrip(".").lower()
++    if not normalized:
++        raise ValueError("hostname is empty")
++    return normalized.encode("idna").decode("ascii")
++
++
++def host_is_allowed(hostname: str, allowed_hosts: Iterable[str]) -> bool:
++    """Match Harbor exact hostnames and leading ``*.`` wildcards."""
++    candidate = normalize_hostname(hostname)
++    for raw_rule in allowed_hosts:
++        rule = normalize_hostname(raw_rule)
++        if rule.startswith("*."):
++            suffix = rule[1:]
++            if candidate.endswith(suffix) and candidate != suffix[1:]:
++                return True
++        elif candidate == rule:
++            return True
++    return False
++
++
++def parse_connect_authority(authority: str) -> Tuple[str, int]:
++    """Parse an HTTP CONNECT authority without accepting URLs or credentials."""
++    value = authority.strip()
++    if not value or "/" in value or "@" in value:
++        raise ValueError("invalid CONNECT authority")
++
++    if value.startswith("["):
++        closing = value.find("]")
++        if closing < 0:
++            raise ValueError("invalid bracketed IPv6 authority")
++        host = value[1:closing]
++        remainder = value[closing + 1 :]
++        if not remainder.startswith(":"):
++            raise ValueError("CONNECT authority must include a port")
++        port_text = remainder[1:]
++    else:
++        if value.count(":") != 1:
++            raise ValueError("CONNECT authority must be host:port")
++        host, port_text = value.rsplit(":", 1)
++
++    host = normalize_hostname(host)
++    try:
++        port = int(port_text)
++    except ValueError as exc:
++        raise ValueError("invalid CONNECT port") from exc
++    if not 1 <= port <= 65535:
++        raise ValueError("CONNECT port is out of range")
++    return host, port
++
++
++def _audit(event: str, **fields: object) -> None:
++    print(json.dumps({"event": event, **fields}, sort_keys=True), flush=True)
++
++
++async def _relay(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
++    try:
++        while True:
++            data = await reader.read(64 * 1024)
++            if not data:
++                break
++            writer.write(data)
++            await writer.drain()
++    except (ConnectionError, asyncio.CancelledError):
++        pass
++    finally:
++        try:
++            writer.write_eof()
++        except (AttributeError, OSError):
++            pass
++
++
++async def _close_writer(writer: asyncio.StreamWriter) -> None:
++    writer.close()
++    wait_closed = getattr(writer, "wait_closed", None)
++    if wait_closed is not None:
++        try:
++            await wait_closed()
++        except (ConnectionError, OSError):
++            pass
++
++
++async def handle_proxy_client(
++    reader: asyncio.StreamReader,
++    writer: asyncio.StreamWriter,
++    allowed_hosts: Sequence[str],
++) -> None:
++    """Accept one allowlisted HTTP CONNECT tunnel."""
++    remote_writer: Optional[asyncio.StreamWriter] = None
++    try:
++        header = await reader.readuntil(b"\r\n\r\n")
++        if len(header) > _MAX_HEADER_BYTES:
++            raise ValueError("proxy request header is too large")
++        first_line = header.split(b"\r\n", 1)[0].decode("ascii", errors="strict")
++        parts = first_line.split()
++        if len(parts) != 3 or parts[0].upper() != "CONNECT":
++            writer.write(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n")
++            await writer.drain()
++            _audit("proxy_denied", reason="connect_required")
++            return
++
++        host, port = parse_connect_authority(parts[1])
++        if not host_is_allowed(host, allowed_hosts):
++            writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
++            await writer.drain()
++            _audit("proxy_denied", host=host, port=port, reason="not_allowlisted")
++            return
++
++        remote_reader, remote_writer = await asyncio.open_connection(host, port)
++        writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
++        await writer.drain()
++        _audit("proxy_allowed", host=host, port=port)
++        await asyncio.gather(
++            _relay(reader, remote_writer),
++            _relay(remote_reader, writer),
++        )
++    except (asyncio.IncompleteReadError, UnicodeDecodeError, ValueError) as exc:
++        writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
++        try:
++            await writer.drain()
++        except ConnectionError:
++            pass
++        _audit("proxy_denied", reason="bad_request", detail=str(exc))
++    except (ConnectionError, OSError) as exc:
++        writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
++        try:
++            await writer.drain()
++        except ConnectionError:
++            pass
++        _audit("proxy_error", detail=str(exc))
++    finally:
++        if remote_writer is not None:
++            await _close_writer(remote_writer)
++        await _close_writer(writer)
++
++
++async def run_proxy(socket_path: Path, allowed_hosts: Sequence[str]) -> int:
++    socket_path.parent.mkdir(parents=True, exist_ok=True)
++    socket_path.unlink(missing_ok=True)
++    server = await asyncio.start_unix_server(
++        lambda reader, writer: handle_proxy_client(reader, writer, allowed_hosts),
++        path=str(socket_path),
++    )
++    socket_path.chmod(0o600)
++    _audit("proxy_ready", socket=str(socket_path), allowed_hosts=list(allowed_hosts))
++
++    stop_event = asyncio.Event()
++    loop = asyncio.get_running_loop()
++    for sig in (signal.SIGINT, signal.SIGTERM):
++        try:
++            loop.add_signal_handler(sig, stop_event.set)
++        except NotImplementedError:
++            pass
++
++    try:
++        await stop_event.wait()
++    finally:
++        server.close()
++        await server.wait_closed()
++        socket_path.unlink(missing_ok=True)
++    return 0
++
++
++def bring_loopback_up() -> None:
++    """Enable ``lo`` without depending on iproute2 inside the SIF."""
++    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as control:
++        ifreq = struct.pack("16sH14x", b"lo", 0)
++        current = fcntl.ioctl(control.fileno(), _SIOCGIFFLAGS, ifreq)
++        _, flags = struct.unpack("16sH14x", current)
++        updated = struct.pack("16sH14x", b"lo", flags | _IFF_UP | _IFF_RUNNING)
++        fcntl.ioctl(control.fileno(), _SIOCSIFFLAGS, updated)
++
++
++def _clean_proxy_environment(env: dict[str, str]) -> dict[str, str]:
++    cleaned = dict(env)
++    for key in list(cleaned):
++        if key.lower() in {
++            "http_proxy",
++            "https_proxy",
++            "all_proxy",
++            "no_proxy",
++        }:
++            cleaned.pop(key, None)
++    return cleaned
++
++
++async def _bridge_client(
++    reader: asyncio.StreamReader,
++    writer: asyncio.StreamWriter,
++    proxy_socket: Path,
++) -> None:
++    unix_writer: Optional[asyncio.StreamWriter] = None
++    try:
++        unix_reader, unix_writer = await asyncio.open_unix_connection(str(proxy_socket))
++        await asyncio.gather(
++            _relay(reader, unix_writer),
++            _relay(unix_reader, writer),
++        )
++    finally:
++        if unix_writer is not None:
++            await _close_writer(unix_writer)
++        await _close_writer(writer)
++
++
++async def run_bridge(proxy_socket: Path, command: Sequence[str]) -> int:
++    if not command:
++        raise ValueError("bridge command is empty")
++    bring_loopback_up()
++    server = await asyncio.start_server(
++        lambda reader, writer: _bridge_client(reader, writer, proxy_socket),
++        host="127.0.0.1",
++        port=0,
++    )
++    sockets = server.sockets or []
++    if not sockets:
++        raise RuntimeError("bridge did not create a listening socket")
++    port = sockets[0].getsockname()[1]
++
++    env = _clean_proxy_environment(os.environ)
++    proxy_url = "http://127.0.0.1:{0}".format(port)
++    env.update(
++        {
++            "HTTP_PROXY": proxy_url,
++            "HTTPS_PROXY": proxy_url,
++            "http_proxy": proxy_url,
++            "https_proxy": proxy_url,
++            "NO_PROXY": "localhost,127.0.0.1",
++            "no_proxy": "localhost,127.0.0.1",
++        }
++    )
++
++    process = await asyncio.create_subprocess_exec(
++        *command,
++        env=env,
++        start_new_session=True,
++    )
++    try:
++        return await process.wait()
++    finally:
++        server.close()
++        await server.wait_closed()
++        if process.returncode is None:
++            try:
++                os.killpg(process.pid, signal.SIGTERM)
++            except ProcessLookupError:
++                pass
++            await process.wait()
++
++
++def run_isolated(command: Sequence[str]) -> int:
++    if not command:
++        raise ValueError("isolated command is empty")
++    bring_loopback_up()
++    env = _clean_proxy_environment(os.environ)
++    os.execvpe(command[0], list(command), env)
++    return 127
++
++
++def _command_after_separator(values: Sequence[str]) -> Sequence[str]:
++    if values and values[0] == "--":
++        return values[1:]
++    return values
++
++
++def main(argv: Optional[Sequence[str]] = None) -> int:
++    parser = argparse.ArgumentParser()
++    subparsers = parser.add_subparsers(dest="mode", required=True)
++
++    proxy_parser = subparsers.add_parser("proxy")
++    proxy_parser.add_argument("--socket", type=Path, required=True)
++    proxy_parser.add_argument("--allow-host", action="append", default=[])
++
++    bridge_parser = subparsers.add_parser("bridge")
++    bridge_parser.add_argument("--proxy-socket", type=Path, required=True)
++    bridge_parser.add_argument("command", nargs=argparse.REMAINDER)
++
++    isolated_parser = subparsers.add_parser("isolated")
++    isolated_parser.add_argument("command", nargs=argparse.REMAINDER)
++
++    args = parser.parse_args(argv)
++    if args.mode == "proxy":
++        if not args.allow_host:
++            parser.error("proxy mode requires at least one --allow-host")
++        return asyncio.run(run_proxy(args.socket, args.allow_host))
++    if args.mode == "bridge":
++        command = _command_after_separator(args.command)
++        return asyncio.run(run_bridge(args.proxy_socket, command))
++    if args.mode == "isolated":
++        return run_isolated(_command_after_separator(args.command))
++    raise RuntimeError("unhandled network guard mode")
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/src/harbor/environments/singularity/server.py b/src/harbor/environments/singularity/server.py
+index 04f9644a..ae05cfd9 100644
+--- a/src/harbor/environments/singularity/server.py
++++ b/src/harbor/environments/singularity/server.py
+@@ -32,6 +32,8 @@ class CommandRequest(BaseModel):
+     cwd: Optional[str] = None
+     env: Optional[Dict[str, str]] = None
+     timeout_sec: Optional[int] = None
++    network_mode: str = "public"
++    network_proxy_socket: Optional[str] = None
+
+
+ class CommandResult(BaseModel):
+@@ -128,10 +130,14 @@ def exec_command(req: CommandRequest):
+
+     cwd = req.cwd if req.cwd else os.environ.get("SINGULARITY_WORKDIR", "/app")
+
++    guarded_command = _guard_network_command(req)
+     if req.timeout_sec is not None:
+-        actual_command = f"timeout --signal=TERM {req.timeout_sec} bash -c {_shell_quote(req.command)}"
++        actual_command = (
++            f"timeout --signal=TERM {req.timeout_sec} "
++            f"bash -c {_shell_quote(guarded_command)}"
++        )
+     else:
+-        actual_command = req.command
++        actual_command = guarded_command
+
+     logger.debug(f"Executing command: {req.command[:100]}")
+
+@@ -165,6 +171,31 @@ def exec_command(req: CommandRequest):
+     )
+
+
++def _guard_network_command(req: CommandRequest) -> str:
++    """Wrap restricted phases in an unprivileged network namespace."""
++    if req.network_mode == "public":
++        return req.command
++    if req.network_mode not in {"no-network", "allowlist"}:
++        raise ValueError(f"unsupported network mode: {req.network_mode}")
++
++    helper_args = [
++        "/usr/bin/unshare",
++        "--user",
++        "--map-root-user",
++        "--net",
++        "/usr/bin/python3",
++        "/staging/network_guard.py",
++    ]
++    if req.network_mode == "no-network":
++        helper_args.append("isolated")
++    else:
++        if not req.network_proxy_socket:
++            raise ValueError("allowlist mode requires a network proxy socket")
++        helper_args.extend(["bridge", "--proxy-socket", req.network_proxy_socket])
++    helper_args.extend(["--", "/bin/bash", "-c", req.command])
++    return " ".join(_shell_quote(value) for value in helper_args)
++
++
+ def _shell_quote(s: str) -> str:
+     """Quote a string for safe use in shell commands."""
+     return "'" + s.replace("'", "'\"'\"'") + "'"
+diff --git a/src/harbor/environments/singularity/singularity.py b/src/harbor/environments/singularity/singularity.py
+index 1bfb09a3..23ed89e9 100644
+--- a/src/harbor/environments/singularity/singularity.py
++++ b/src/harbor/environments/singularity/singularity.py
+@@ -44,7 +44,7 @@ from harbor.environments.capabilities import (
+ )
+ from harbor.environments.singularity.gpu_allocator import GpuAllocator, GpuLease
+ from harbor.models.environment_type import EnvironmentType
+-from harbor.models.task.config import EnvironmentConfig
++from harbor.models.task.config import EnvironmentConfig, NetworkMode, NetworkPolicy
+ from harbor.models.trial.paths import TrialPaths
+
+
+@@ -136,6 +136,9 @@ class SingularityEnvironment(BaseEnvironment):
+         self._stream_task: asyncio.Task[None] | None = None
+         self._memory_watchdog_task: asyncio.Task[None] | None = None
+         self._http_client: httpx.AsyncClient | None = None
++        self._network_proxy_process: asyncio.subprocess.Process | None = None
++        self._network_proxy_log_task: asyncio.Task[None] | None = None
++        self._network_proxy_socket: Path | None = None
+
+         memory_mb = self._effective_memory_mb
+         self._memory_limit_bytes = (
+@@ -158,7 +161,13 @@ class SingularityEnvironment(BaseEnvironment):
+     @property
+     @override
+     def capabilities(self) -> EnvironmentCapabilities:
+-        return EnvironmentCapabilities(gpus=self._singularity_nv, mounted=True)
++        return EnvironmentCapabilities(
++            gpus=self._singularity_nv,
++            mounted=True,
++            disable_internet=True,
++            network_allowlist=True,
++            dynamic_network_policy=True,
++        )
+
+     @property
+     def _docker_image(self) -> str | None:
+@@ -364,6 +373,10 @@ class SingularityEnvironment(BaseEnvironment):
+         staging_server = self._staging_dir / "_hbexec.py"
+         shutil.copy(server_script, staging_server)
+
++        network_guard = Path(__file__).parent / "network_guard.py"
++        staging_network_guard = self._staging_dir / "network_guard.py"
++        shutil.copy(network_guard, staging_network_guard)
++
+         bootstrap_src = Path(__file__).parent / "bootstrap.sh"
+         bootstrap_script = self._staging_dir / "bootstrap.sh"
+         shutil.copy(bootstrap_src, bootstrap_script)
+@@ -540,6 +553,74 @@ class SingularityEnvironment(BaseEnvironment):
+         except Exception as e:
+             self.logger.debug(f"Server output stream ended: {e}")
+
++    async def _stream_network_proxy_output(self) -> None:
++        if not self._network_proxy_process or not self._network_proxy_process.stdout:
++            return
++        async for line in self._network_proxy_process.stdout:
++            decoded = line.decode(errors="replace").rstrip()
++            if decoded:
++                self.logger.debug(f"[network-proxy] {decoded}")
++
++    async def _stop_network_proxy(self) -> None:
++        process = self._network_proxy_process
++        self._network_proxy_process = None
++        if process and process.returncode is None:
++            process.terminate()
++            try:
++                await asyncio.wait_for(process.wait(), timeout=2.0)
++            except asyncio.TimeoutError:
++                process.kill()
++                await process.wait()
++        if self._network_proxy_log_task:
++            try:
++                await self._network_proxy_log_task
++            except asyncio.CancelledError:
++                pass
++            self._network_proxy_log_task = None
++        if self._network_proxy_socket:
++            self._network_proxy_socket.unlink(missing_ok=True)
++            self._network_proxy_socket = None
++
++    async def _start_network_proxy(self, allowed_hosts: list[str]) -> None:
++        if not allowed_hosts:
++            raise ValueError("Singularity allowlist policy requires allowed hosts")
++        await self._stop_network_proxy()
++        socket_path = self._staging / "network-proxy.sock"
++        command = [
++            sys.executable,
++            str(Path(__file__).parent / "network_guard.py"),
++            "proxy",
++            "--socket",
++            str(socket_path),
++        ]
++        for host in allowed_hosts:
++            command.extend(["--allow-host", host])
++        self._network_proxy_process = await asyncio.create_subprocess_exec(
++            *command,
++            stdout=asyncio.subprocess.PIPE,
++            stderr=asyncio.subprocess.STDOUT,
++        )
++        self._network_proxy_log_task = asyncio.create_task(
++            self._stream_network_proxy_output()
++        )
++        self._network_proxy_socket = socket_path
++        for _ in range(100):
++            if socket_path.is_socket():
++                return
++            if self._network_proxy_process.returncode is not None:
++                await self._network_proxy_log_task
++                raise RuntimeError("Singularity allowlist proxy failed to start")
++            await asyncio.sleep(0.05)
++        await self._stop_network_proxy()
++        raise TimeoutError("Singularity allowlist proxy did not become ready")
++
++    @override
++    async def _apply_network_policy(self, network_policy: NetworkPolicy) -> None:
++        if network_policy.network_mode == NetworkMode.ALLOWLIST:
++            await self._start_network_proxy(network_policy.allowed_hosts)
++        else:
++            await self._stop_network_proxy()
++
+     def _get_process_tree_memory(self, pid: int) -> int:
+         """Get total PSS memory of a process and all its descendants.
+
+@@ -718,6 +799,8 @@ class SingularityEnvironment(BaseEnvironment):
+                     self._effective_gpus
+                 )
+             await self._start_server()
++            if self._network_policy.network_mode == NetworkMode.ALLOWLIST:
++                await self._start_network_proxy(self._network_policy.allowed_hosts)
+             await self._upload_environment_dir_after_start()
+         except BaseException:
+             if self._gpu_lease:
+@@ -728,6 +811,7 @@ class SingularityEnvironment(BaseEnvironment):
+     @override
+     async def stop(self, delete: bool) -> None:
+         try:
++            await self._stop_network_proxy()
+             await self._stop_server(delete)
+         finally:
+             if self._gpu_lease:
+@@ -853,6 +937,12 @@ class SingularityEnvironment(BaseEnvironment):
+                     "cwd": cwd,
+                     "env": merged_env,
+                     "timeout_sec": timeout_sec,
++                    "network_mode": self._network_policy.network_mode.value,
++                    "network_proxy_socket": (
++                        "/staging/network-proxy.sock"
++                        if self._network_policy.network_mode == NetworkMode.ALLOWLIST
++                        else None
++                    ),
+                 },
+                 timeout=http_timeout,
+             )
+diff --git a/tests/unit/environments/test_singularity_network_guard.py b/tests/unit/environments/test_singularity_network_guard.py
+new file mode 100644
+index 00000000..22e3d6c0
+--- /dev/null
++++ b/tests/unit/environments/test_singularity_network_guard.py
+@@ -0,0 +1,113 @@
++import asyncio
++
++import pytest
++
++from harbor.environments.singularity.network_guard import (
++    handle_proxy_client,
++    host_is_allowed,
++    parse_connect_authority,
++)
++from harbor.environments.singularity.server import (
++    CommandRequest,
++    _guard_network_command,
++)
++
++
++def test_host_is_allowed_supports_exact_and_wildcard_rules() -> None:
++    allowed = ["api.openai.com", "*.example.internal"]
++    assert host_is_allowed("API.OPENAI.COM.", allowed)
++    assert host_is_allowed("model.example.internal", allowed)
++    assert not host_is_allowed("example.internal", allowed)
++    assert not host_is_allowed("api.openai.com.evil.invalid", allowed)
++
++
++@pytest.mark.parametrize(
++    ("authority", "expected"),
++    [
++        ("api.openai.com:443", ("api.openai.com", 443)),
++        ("[::1]:8443", ("::1", 8443)),
++    ],
++)
++def test_parse_connect_authority(authority, expected) -> None:
++    assert parse_connect_authority(authority) == expected
++
++
++@pytest.mark.parametrize(
++    "authority",
++    ["https://api.openai.com", "user@api.openai.com:443", "host", "host:0"],
++)
++def test_parse_connect_authority_rejects_unsafe_values(authority) -> None:
++    with pytest.raises(ValueError):
++        parse_connect_authority(authority)
++
++
++def test_guard_network_command_is_fail_closed() -> None:
++    public = _guard_network_command(CommandRequest(command="true"))
++    assert public == "true"
++
++    isolated = _guard_network_command(
++        CommandRequest(command="true", network_mode="no-network")
++    )
++    assert "unshare" in isolated
++    assert "isolated" in isolated
++
++    with pytest.raises(ValueError, match="proxy socket"):
++        _guard_network_command(CommandRequest(command="true", network_mode="allowlist"))
++
++
++@pytest.mark.asyncio
++async def test_connect_proxy_allows_only_configured_host(
++    monkeypatch,
++) -> None:
++    opened = []
++
++    class FakeReader:
++        def __init__(self, header):
++            self.header = header
++
++        async def readuntil(self, separator):
++            return self.header
++
++        async def read(self, size):
++            return b""
++
++    class FakeWriter:
++        def __init__(self):
++            self.buffer = bytearray()
++
++        def write(self, data):
++            self.buffer.extend(data)
++
++        async def drain(self):
++            pass
++
++        def write_eof(self):
++            pass
++
++        def close(self):
++            pass
++
++        async def wait_closed(self):
++            pass
++
++    async def fake_open_connection(host, port):
++        opened.append((host, port))
++        upstream_reader = asyncio.StreamReader()
++        upstream_reader.feed_eof()
++        return upstream_reader, FakeWriter()
++
++    monkeypatch.setattr(asyncio, "open_connection", fake_open_connection)
++    allowed_reader = FakeReader(b"CONNECT 127.0.0.1:443 HTTP/1.1\r\n\r\n")
++    allowed_writer = FakeWriter()
++    await handle_proxy_client(
++        allowed_reader, allowed_writer, allowed_hosts=["127.0.0.1"]
++    )
++    assert bytes(allowed_writer.buffer) == (
++        b"HTTP/1.1 200 Connection Established\r\n\r\n"
++    )
++    assert opened == [("127.0.0.1", 443)]
++
++    denied_reader = FakeReader(b"CONNECT example.invalid:443 HTTP/1.1\r\n\r\n")
++    denied_writer = FakeWriter()
++    await handle_proxy_client(denied_reader, denied_writer, allowed_hosts=["127.0.0.1"])
++    assert bytes(denied_writer.buffer) == b"HTTP/1.1 403 Forbidden\r\n\r\n"

@@ -1,0 +1,48 @@
+diff --git a/src/harbor/agents/installed/codex.py b/src/harbor/agents/installed/codex.py
+index 1111111..2222222 100644
+--- a/src/harbor/agents/installed/codex.py
++++ b/src/harbor/agents/installed/codex.py
+@@ -53,6 +53,14 @@ class Codex(BaseInstalledAgent):
+             default="high",
+             format="-c model_reasoning_effort={value}",
+         ),
++        CliFlag(
++            "web_search",
++            cli="-c",
++            type="enum",
++            choices=["disabled", "cached", "indexed", "live"],
++            default="live",
++            format="-c web_search={value}",
++        ),
+         CliFlag(
+             "reasoning_summary",
+             cli="-c",
+diff --git a/tests/unit/agents/installed/test_flag_descriptors.py b/tests/unit/agents/installed/test_flag_descriptors.py
+index 3333333..4444444 100644
+--- a/tests/unit/agents/installed/test_flag_descriptors.py
++++ b/tests/unit/agents/installed/test_flag_descriptors.py
+@@ -175,7 +175,23 @@ class TestCliFlagBuilding:
+
+     def test_codex_no_reasoning_effort(self, temp_dir):
+         agent = Codex(logs_dir=temp_dir, reasoning_effort=None)
+-        assert agent.build_cli_flags() == ""
++        flags = agent.build_cli_flags()
++        assert "model_reasoning_effort" not in flags
++        assert "-c web_search=live" in flags
++
++    def test_codex_web_search_live_by_default(self, temp_dir):
++        agent = Codex(logs_dir=temp_dir)
++        assert "-c web_search=live" in agent.build_cli_flags()
++
++    def test_codex_web_search_mode_can_be_explicitly_overridden(self, temp_dir):
++        agent = Codex(logs_dir=temp_dir, web_search="disabled")
++        flags = agent.build_cli_flags()
++        assert "-c web_search=disabled" in flags
++        assert "-c web_search=live" not in flags
++
++    def test_codex_invalid_web_search_mode_raises(self, temp_dir):
++        with pytest.raises(ValueError, match="Valid values"):
++            Codex(logs_dir=temp_dir, web_search="public")
+
+
+ class TestEnvVarResolving:
