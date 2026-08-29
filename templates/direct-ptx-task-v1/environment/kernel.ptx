@@ -1,0 +1,10 @@
+.version 9.2
+.target sm_@@SM@@
+.address_size 64
+
+// Task-specific Candidate starter. The task author must replace the parameter
+// list with the exact public ABI before release. The no-op body must score 0.
+.visible .entry @@ENTRY_NAME@@()
+{
+    ret;
+}

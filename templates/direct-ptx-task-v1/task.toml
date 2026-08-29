@@ -12,12 +12,8 @@ keywords = ["ptx", "cuda", @@GPU_KEYWORD_TOML@@, "direct-ptx"]
 
 [metadata]
 benchmark_setting = "direct-ptx"
-template_version = "direct-ptx-v0.1"
+template_version = "direct-ptx-v1"
 hardware_target = @@HARDWARE_TARGET_TOML@@
-ptx_docs_path = "/opt/ptx-docs"
-ptx_validation_tools = ["ptxas", "cuobjdump"]
-documentation_tools = ["pdftotext"]
-prohibited_high_level_toolchains = ["nvcc", "NVRTC", "NVVM", "Triton"]
 required_gpus = 1
 required_gpu_type = @@GPU_TYPE_TOML@@
 implementation_status = "scaffold"
@@ -35,8 +31,6 @@ network_mode = "@@NETWORK_MODE@@"
 @@ALLOWED_HOSTS_TOML@@
 
 [environment]
-# Trusted environment setup may fetch pinned, hash-verified artifacts. Harbor
-# applies the stricter phase override above while the untrusted Agent runs.
 network_mode = "public"
 build_timeout_sec = 900.0
 os = "linux"

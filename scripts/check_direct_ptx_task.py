@@ -5,38 +5,36 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import re
 import sys
 import tomllib
 from pathlib import Path
 
 
-REQUIRED_FILES = (
-    "README.md",
+V1_REQUIRED_FILES = (
     "task.toml",
     "instruction.md",
     "environment/Dockerfile",
     "environment/docker-compose.yaml",
-    "environment/files/direct-ptx-policy-check",
-    "environment/files/setup.sh",
-    "environment/files/ptx-docs/manifest.toml",
+    "environment/kernel.ptx",
+    "environment/reference.py",
+    "environment/measure.py",
     "solution/solve.sh",
-    "tests/direct-ptx-policy-check",
-    "tests/ptx-docs-manifest.toml",
+    "solution/performance_reference.ptx",
     "tests/test.sh",
-    "tests/verify_hardware.py",
-    "tests/verify_and_benchmark.py",
+    "tests/verifier.py",
+    "tests/performance_baseline.ptx",
+    "tests/performance_reference.ptx",
 )
-SHA256 = re.compile(r"[0-9a-f]{64}$")
 FROM_INSTRUCTION = re.compile(r"^\s*FROM\s+.+$", re.IGNORECASE | re.MULTILINE)
-PINNED_FROM = re.compile(
-    r"^\s*FROM\s+(?:--platform=\S+\s+)?\S+@sha256:[0-9a-f]{64}"
-    r"(?:\s+AS\s+\S+)?\s*$",
-    re.IGNORECASE,
-)
 NETWORK_MODES = {"public", "allowlist", "no-network"}
-SCAFFOLD_SENTINEL = "DIRECT_PTX_SCAFFOLD_UNIMPLEMENTED"
+V1_UNIMPLEMENTED_MARKERS = (
+    "DIRECT_PTX_REFERENCE_UNIMPLEMENTED",
+    "DIRECT_PTX_MEASURE_UNIMPLEMENTED",
+    "DIRECT_PTX_VERIFIER_UNIMPLEMENTED",
+    "DIRECT_PTX_PERFORMANCE_BASELINE_UNIMPLEMENTED",
+    "DIRECT_PTX_PERFORMANCE_REFERENCE_UNIMPLEMENTED",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -107,44 +105,6 @@ def validate_network_policy(
     return mode, hosts
 
 
-def validate_document_snapshot(root: Path, errors: list[str]) -> None:
-    docs_root = root / "environment" / "files" / "ptx-docs"
-    manifest_path = docs_root / "manifest.toml"
-    try:
-        manifest = load_toml(manifest_path)
-    except (OSError, tomllib.TOMLDecodeError) as error:
-        errors.append(f"invalid PTX documentation manifest: {error}")
-        return
-
-    required = ("document_path", "document_version", "source_url", "sha256", "license")
-    for field in required:
-        value = manifest.get(field)
-        if not isinstance(value, str) or not value.strip() or "TODO" in value:
-            errors.append(f"PTX documentation manifest field is incomplete: {field}")
-
-    relative = manifest.get("document_path")
-    expected_hash = manifest.get("sha256")
-    if not isinstance(relative, str) or "TODO" in relative:
-        return
-    document = (docs_root / relative).resolve()
-    try:
-        document.relative_to(docs_root.resolve())
-    except ValueError:
-        errors.append("PTX document_path escapes environment/files/ptx-docs")
-        return
-    if not document.is_file():
-        errors.append(f"missing pinned PTX documentation file: {relative}")
-        return
-    if not isinstance(expected_hash, str) or not SHA256.fullmatch(expected_hash):
-        errors.append("PTX documentation sha256 must be 64 lowercase hexadecimal characters")
-        return
-    actual_hash = hashlib.sha256(document.read_bytes()).hexdigest()
-    if actual_hash != expected_hash:
-        errors.append(
-            f"PTX documentation SHA-256 mismatch: expected {expected_hash}, got {actual_hash}"
-        )
-
-
 def validate_kernel_artifact(task: dict[str, object], errors: list[str]) -> None:
     artifacts = task.get("artifacts")
     if not isinstance(artifacts, list):
@@ -164,50 +124,71 @@ def validate_kernel_artifact(task: dict[str, object], errors: list[str]) -> None
     )
 
 
-def validate_trusted_verifier_assets(root: Path, errors: list[str]) -> None:
-    pairs = (
-        (
-            "environment/files/direct-ptx-policy-check",
-            "tests/direct-ptx-policy-check",
-            "Agent-visible and hidden Direct-PTX policy checkers must match",
-        ),
-        (
-            "environment/files/ptx-docs/manifest.toml",
-            "tests/ptx-docs-manifest.toml",
-            "runtime and hidden PTX documentation manifests must match",
-        ),
-    )
-    for public_relative, hidden_relative, message in pairs:
-        if (root / public_relative).read_bytes() != (root / hidden_relative).read_bytes():
-            errors.append(message)
+def validate_v1_structure(root: Path, errors: list[str]) -> None:
+    dockerfile = (root / "environment" / "Dockerfile").read_text()
+    for public_file in ("kernel.ptx", "reference.py", "measure.py"):
+        if public_file not in dockerfile:
+            errors.append(
+                f"environment/Dockerfile must copy {public_file} into /app"
+            )
+    for required_text in ("ptxas", "cuobjdump", "nvcc", "nvrtc", "nvvm"):
+        if required_text.casefold() not in dockerfile.casefold():
+            errors.append(
+                f"environment/Dockerfile must enforce the Direct-PTX tool policy for {required_text}"
+            )
+
+    instruction = (root / "instruction.md").read_text()
+    for required_text in ("/app/kernel.ptx", "/app/reference.py", "/app/measure.py"):
+        if required_text not in instruction:
+            errors.append(f"instruction.md must mention {required_text}")
+
+    solve = (root / "solution" / "solve.sh").read_text()
+    if "/solution/performance_reference.ptx" not in solve or "/app/kernel.ptx" not in solve:
+        errors.append(
+            "solution/solve.sh must copy performance_reference.ptx to /app/kernel.ptx"
+        )
+
+    test_entry = (root / "tests" / "test.sh").read_text()
+    if "/tests/verifier.py" not in test_entry:
+        errors.append("tests/test.sh must run /tests/verifier.py")
+
+    solution_reference = root / "solution" / "performance_reference.ptx"
+    hidden_reference = root / "tests" / "performance_reference.ptx"
+    if solution_reference.read_bytes() != hidden_reference.read_bytes():
+        errors.append(
+            "solution and hidden performance_reference.ptx files must match"
+        )
 
 
-def validate_release_implementation(root: Path, errors: list[str]) -> None:
-    implementation_files = (
-        root / "solution" / "solve.sh",
-        root / "tests" / "verify_and_benchmark.py",
-    )
-    for path in implementation_files:
+def validate_v1_release_implementation(root: Path, errors: list[str]) -> None:
+    for path in (
+        root / "environment" / "reference.py",
+        root / "environment" / "measure.py",
+        root / "tests" / "verifier.py",
+        root / "tests" / "performance_baseline.ptx",
+        root / "tests" / "performance_reference.ptx",
+        root / "solution" / "performance_reference.ptx",
+    ):
         content = path.read_text()
-        if SCAFFOLD_SENTINEL in content:
-            errors.append(
-                f"scaffold implementation marker remains in {path.relative_to(root)}"
-            )
+        for marker in V1_UNIMPLEMENTED_MARKERS:
+            if marker in content:
+                errors.append(
+                    f"unimplemented v1 marker remains in {path.relative_to(root)}"
+                )
         if "NotImplementedError" in content:
-            errors.append(
-                f"unimplemented verifier/Oracle logic remains in {path.relative_to(root)}"
-            )
+            errors.append(f"unimplemented code remains in {path.relative_to(root)}")
+
+    baseline = (root / "tests" / "performance_baseline.ptx").read_bytes()
+    reference = (root / "tests" / "performance_reference.ptx").read_bytes()
+    starter = (root / "environment" / "kernel.ptx").read_bytes()
+    if baseline == reference:
+        errors.append("performance Baseline and Reference must not be identical")
+    if starter == reference:
+        errors.append("Candidate starter and performance Reference must not be identical")
 
     dockerfile = (root / "environment" / "Dockerfile").read_text()
-    from_instructions = FROM_INSTRUCTION.findall(dockerfile)
-    if not from_instructions:
+    if not FROM_INSTRUCTION.search(dockerfile):
         errors.append("environment/Dockerfile must contain a FROM instruction")
-    for instruction in from_instructions:
-        if not PINNED_FROM.fullmatch(instruction):
-            errors.append(
-                "every environment/Dockerfile FROM image must be pinned by "
-                f"SHA-256 digest; found: {instruction.strip()}"
-            )
 
 
 def main() -> int:
@@ -219,31 +200,36 @@ def main() -> int:
         print(f"error: task directory does not exist: {root}", file=sys.stderr)
         return 2
 
-    for relative in REQUIRED_FILES:
-        if not (root / relative).is_file():
-            errors.append(f"missing required file: {relative}")
-
-    if errors:
-        for error in errors:
-            print(f"error: {error}", file=sys.stderr)
-        return 1
-
     try:
         task = load_toml(root / "task.toml")
     except (OSError, tomllib.TOMLDecodeError) as error:
         print(f"error: invalid task.toml: {error}", file=sys.stderr)
         return 1
 
-    validate_kernel_artifact(task, errors)
-    validate_trusted_verifier_assets(root, errors)
-
     metadata = task.get("metadata", {})
     environment = task.get("environment", {})
     agent = task.get("agent", {})
+    template_version = (
+        metadata.get("template_version") if isinstance(metadata, dict) else None
+    )
+    if template_version != "direct-ptx-v1":
+        print(
+            "error: unsupported template_version; migrate the task to direct-ptx-v1",
+            file=sys.stderr,
+        )
+        return 1
+    for relative in V1_REQUIRED_FILES:
+        if not (root / relative).is_file():
+            errors.append(f"missing required file: {relative}")
+    if errors:
+        for error in errors:
+            print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    validate_kernel_artifact(task, errors)
+    validate_v1_structure(root, errors)
     if not isinstance(metadata, dict) or metadata.get("benchmark_setting") != "direct-ptx":
         errors.append("metadata.benchmark_setting must be direct-ptx")
-    if not isinstance(metadata, dict) or not metadata.get("template_version"):
-        errors.append("metadata.template_version must be set")
     if not isinstance(metadata, dict) or metadata.get("required_gpus") != 1:
         errors.append("metadata.required_gpus must be 1")
     if not isinstance(metadata, dict) or not metadata.get("required_gpu_type"):
@@ -290,8 +276,7 @@ def main() -> int:
             errors.append(
                 "metadata.implementation_status must be implemented for --release"
             )
-        validate_document_snapshot(root, errors)
-        validate_release_implementation(root, errors)
+        validate_v1_release_implementation(root, errors)
 
     if errors:
         for error in errors:

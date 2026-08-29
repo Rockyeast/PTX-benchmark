@@ -1,0 +1,9 @@
+.version 9.2
+.target sm_@@SM@@
+.address_size 64
+
+// DIRECT_PTX_PERFORMANCE_REFERENCE_UNIMPLEMENTED
+.visible .entry @@ENTRY_NAME@@()
+{
+    ret;
+}

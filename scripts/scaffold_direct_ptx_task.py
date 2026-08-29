@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Generate a fail-closed Harbor direct-PTX task from the v0 template."""
+"""Generate a fail-closed Harbor Direct-PTX task from the Docker-only v1 template."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE_ROOT = REPOSITORY_ROOT / "templates" / "direct-ptx-task-v0"
+TEMPLATE_ROOT = REPOSITORY_ROOT / "templates" / "direct-ptx-task-v1"
 PLACEHOLDER = re.compile(r"@@[A-Z0-9_]+@@")
 SLUG = re.compile(r"ptx-[a-z0-9]+(?:-[a-z0-9]+)*$")
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
@@ -35,7 +35,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hardware-target", default="NVIDIA B200")
     parser.add_argument("--gpu-type", default="B200")
     parser.add_argument("--sm", default="100", help="SM number without the sm_ prefix")
-    parser.add_argument("--agent-timeout", type=float, default=600.0)
+    parser.add_argument(
+        "--agent-timeout",
+        type=float,
+        required=True,
+        help="Per-task Agent wall-clock budget in seconds; must be chosen explicitly",
+    )
     parser.add_argument("--verifier-timeout", type=float, default=180.0)
     parser.add_argument(
         "--network-mode",
@@ -121,13 +126,10 @@ def render_tree(destination: Path, values: dict[str, str]) -> None:
             raise RuntimeError(f"unresolved placeholders in {path}: {leftovers}")
         path.write_text(content)
     for relative in (
-        "environment/files/direct-ptx-policy-check",
-        "environment/files/setup.sh",
+        "environment/measure.py",
         "solution/solve.sh",
-        "tests/direct-ptx-policy-check",
         "tests/test.sh",
-        "tests/verify_hardware.py",
-        "tests/verify_and_benchmark.py",
+        "tests/verifier.py",
     ):
         path = destination / relative
         path.chmod(path.stat().st_mode | 0o111)
@@ -149,11 +151,10 @@ def main() -> int:
         return 2
 
     print(f"Generated fail-closed task: {destination}")
-    print("Next: replace every TODO, align ABI across instruction/Oracle/verifier,")
-    print("pin the local PTX documentation snapshot, then run the task checker,")
-    print("Oracle, negative fixtures, and a real Agent in that order.")
+    print("Next: replace every TODO and align the ABI across instruction, starter,")
+    print("public reference, measurement harness, Baseline, Reference, and verifier.")
+    print("Then run the checker, the two Reference/starter validations, and a real Agent.")
     print("Docker: export PTX_BENCH_GPU_DEVICE=<idle GPU index>")
-    print("Singularity: pass --override-gpus 1 and the validated SIF kwargs")
     print(f"Check: python3 scripts/check_direct_ptx_task.py {destination}")
     return 0
 
