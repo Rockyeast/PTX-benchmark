@@ -5,6 +5,11 @@
 Harbor 基础链路和第一个 B200 PTX smoke task 已跑通。第一道带正确性与性能评分
 的校准题 `ptx-vector-add` 已完成实现、B200 正负例和真实 Agent 校准。
 
+当前最复杂单入口 pilot `ptx-kda-speculative-decode-bf16-t6-n8-h16-hv32-d128`
+已完成 B200 Oracle、三个语义负例和真实 Codex/high 校准。3600 秒候选上限 Trial 在
+约 360 秒自然结束，8/8 correctness，性能 reward `0.2775`；该单次结果尚不能冻结
+难度或正式时间预算。
+
 ## 目录结构
 
 ```text
@@ -14,10 +19,11 @@ PTX-benchmark/
 │   ├── 任务.md                  # 当前计划和验收标准
 │   ├── harbor-job-output.md    # Harbor jobs 输出目录结构和阅读方法
 │   ├── harbor-task-lifecycle.md # Task 从 instruction 到 reward 的运行链路
-│   ├── task-authoring-template.md # Direct-PTX v0 模板与生成器用法
-│   ├── dataset/                # 数据集级设计与题目目录
-│   │   ├── dataset-design.md   # 数据集分层、task 粒度、评分与 release gate
-│   │   └── task-catalog.md     # 已有任务、五道 pilot 和候选池
+│   ├── dataset/
+│   │   ├── dataset-design.md   # 内部数据集设计笔记
+│   │   └── task-catalog.md     # 内部候选池和开发状态
+│   ├── experiments/
+│   │   └── summary.md          # 内部实验批次和下一步
 │   ├── 新任务阅读清单.md         # 每个新 task 固定看什么、按什么顺序看
 │   ├── tasks/
 │   │   └── ptx-vector-add-spec.md # 第一题的接口、正确性、计时和评分规格
@@ -27,12 +33,17 @@ PTX-benchmark/
 │       ├── harbor-cli.md       # Harbor 安装与 CLI 实测记录
 │       ├── docker-wsl.md       # Docker Desktop / WSL 配置记录
 │       ├── qwen-lovelace.md    # Lovelace Qwen3.8 vLLM 服务与 Harbor 接入
-│       └── harbor-singularity-gpu-allocation.md # 远端并行 GPU 分配
+│       ├── harbor-singularity-gpu-allocation.md # 远端并行 GPU 分配
+│       └── harbor-singularity-network-policy.md # Agent 阶段网络隔离
 ├── images/                     # 可复现的 PTX/Codex SIF 定义
 ├── patches/harbor/             # 远端 Harbor Singularity 补丁
 ├── scripts/                    # 环境管理、task scaffold 与 release checker
 ├── templates/                  # 未冻结的 Direct-PTX task authoring 模板
 ├── tasks/                      # Harbor dev dataset manifest 与 task 源码
+│   ├── README.md               # 新 task 的目录、创建、验证和运行规范
+│   ├── DESIGN.md               # 新 task 的选题、边界、评分和校准规范
+│   ├── CATALOG.md              # 发布任务清单、状态和候选池
+│   ├── RESULTS.md              # 实验结果和校准记录
 │   ├── dataset.toml            # ptx-bench/ptx-bench-dev，固定 task digest
 │   ├── harbor-smoke/           # 最小文本任务
 │   ├── ptx-add-one/            # B200 PTX 正确性 smoke task
@@ -54,17 +65,16 @@ PTX-benchmark/
 
 ## 建议阅读顺序
 
-1. [`docs/source/录音.txt`](docs/source/%E5%BD%95%E9%9F%B3.txt)：了解项目来源和目标。
-2. [`docs/任务.md`](docs/%E4%BB%BB%E5%8A%A1.md)：查看任务进度与验收标准。
-3. [`docs/dataset/dataset-design.md`](docs/dataset/dataset-design.md)：先看整个数据集的分层、家族和 release gate。
-4. [`docs/dataset/task-catalog.md`](docs/dataset/task-catalog.md)：查看已有任务、五道 pilot 和候选池。
-5. [`tasks/harbor-smoke/`](tasks/harbor-smoke/)：查看最小 Harbor task。
-6. [`tasks/ptx-add-one/`](tasks/ptx-add-one/)：查看已跑通的 PTX 正确性链路。
-7. [`docs/tasks/ptx-vector-add-spec.md`](docs/tasks/ptx-vector-add-spec.md)：查看第一道性能校准题。
-8. [`docs/新任务阅读清单.md`](docs/%E6%96%B0%E4%BB%BB%E5%8A%A1%E9%98%85%E8%AF%BB%E6%B8%85%E5%8D%95.md)：以后每个新 task 都按这份清单阅读和验收。
-9. [`docs/task-authoring-template.md`](docs/task-authoring-template.md)：使用统一的 Direct-PTX v0 模板创建新题。
-10. [`docs/harbor-job-output.md`](docs/harbor-job-output.md)：理解一次运行生成的 Job、Trial、Agent 和 Verifier 文件。
-11. [`docs/harbor-task-lifecycle.md`](docs/harbor-task-lifecycle.md)：查看 instruction、Agent、Verifier 和 reward 的完整实证链路。
+1. [`docs/任务.md`](docs/%E4%BB%BB%E5%8A%A1.md)：查看任务进度与验收标准。
+2. [`tasks/README.md`](tasks/README.md)：查看统一的 task 目录、创建、验证和运行流程。
+3. [`tasks/DESIGN.md`](tasks/DESIGN.md)：查看选题、task 边界、评分角色和校准规则。
+4. [`tasks/CATALOG.md`](tasks/CATALOG.md)：查看正式发布目录。
+5. [`tasks/RESULTS.md`](tasks/RESULTS.md)：查看正式发布结果。
+6. [`docs/experiments/summary.md`](docs/experiments/summary.md)：查看开发实验和校准证据。
+7. [`tasks/harbor-smoke/`](tasks/harbor-smoke/)：查看最小 Harbor task。
+8. [`tasks/ptx-add-one/`](tasks/ptx-add-one/)：查看已跑通的 PTX 正确性链路。
+9. [`docs/harbor-job-output.md`](docs/harbor-job-output.md)：理解一次运行生成的 Job、Trial、Agent 和 Verifier 文件。
+10. [`docs/harbor-task-lifecycle.md`](docs/harbor-task-lifecycle.md)：查看 instruction、Agent、Verifier 和 reward 的完整实证链路。
 
 ## 当前进度
 
@@ -79,7 +89,9 @@ PTX-benchmark/
   `write_file` 和 `run_shell_command` 工具调用均已验证。
 - Harbor task 生命周期文档已经完成，并以实际 task、运行日志和 Harbor `0.21.0` 源码为依据。
 - 远端 B200 上的 `ptx-add-one` Oracle、负例和真实 Codex 均已完成验证。
-- 通用 CUDA SIF、Codex 专用 SIF 和 Singularity GPU 自动分配补丁已经完成。
+- 通用 CUDA SIF、Codex 专用 SIF、Singularity GPU 自动分配和 Agent 阶段网络隔离
+  补丁已经完成。`no-network` 的直接公网探针被阻断且 Oracle reward 为 `1`；
+  allowlist 下真实 Codex 只经模型 API 域名完成 add-one，reward 为 `1`。
 - `ptx-vector-add` 已实现 Oracle、CPU 独立正确性门控、内存 canary、隐藏
   固定 PTX reference、CUDA Event 计时和多指标 reward。B200 上 Oracle 三次 reward
   为 `0.990683 / 0.997697 / 0.987482`，慢速正确实现为 `0.267804`，缺失 entry

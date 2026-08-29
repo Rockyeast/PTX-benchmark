@@ -11,6 +11,15 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
+# Local personal documentation that is not part of the benchmark release
+/.local-docs/
+/组会/
+/docs/visualizations/
+**/*.zh-CN.md
+
+# Local-only development infrastructure; Harbor owns jobs/ for run outputs
+/local-dev/
+
 # Local secrets and editor/OS files
 .env
 .DS_Store
