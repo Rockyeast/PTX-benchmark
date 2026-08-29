@@ -1,0 +1,6 @@
+schema_version = "1.0"
+document_path = "README.md"
+document_version = "PTX ISA 9.2 source record for SiLU-gate feasibility"
+source_url = "https://docs.nvidia.com/cuda/archive/13.2.1/pdf/ptx_isa_9.2.pdf"
+sha256 = "3823d773d977b5686009e6c97e9c1d415b73fc896a09075d36704420ea3c36a3"
+license = "Repository-authored source record; NVIDIA PTX ISA PDF is not redistributed"

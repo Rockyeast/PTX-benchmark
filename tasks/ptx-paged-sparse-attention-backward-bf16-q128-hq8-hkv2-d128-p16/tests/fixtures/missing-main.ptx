@@ -1,0 +1,12 @@
+.version 9.2
+.target sm_100a
+.address_size 64
+
+.visible .entry paged_sparse_attn_bwd_zero_bf16_q128_hq8_hkv2_d128_p16(
+    .param .u64 dq,
+    .param .u64 dk,
+    .param .u64 dv
+)
+{
+    ret;
+}

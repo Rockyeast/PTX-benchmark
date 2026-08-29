@@ -1,0 +1,85 @@
+#!/bin/bash
+
+set -euo pipefail
+
+trusted_manifest=/opt/ptx-docs/manifest.toml
+if [ "$#" -eq 2 ] && [ "$1" = "--trusted-manifest" ]; then
+    trusted_manifest=$2
+elif [ "$#" -ne 0 ]; then
+    printf 'usage: %s [--trusted-manifest PATH]\n' "$0" >&2
+    exit 2
+fi
+
+command -v ptxas >/dev/null
+command -v cuobjdump >/dev/null
+command -v pdftotext >/dev/null
+
+for prohibited_command in nvcc triton; do
+    if command -v "$prohibited_command" >/dev/null 2>&1; then
+        printf 'prohibited command is available: %s\n' "$prohibited_command" >&2
+        exit 1
+    fi
+done
+
+if [ -e /usr/local/cuda/nvvm ]; then
+    printf 'prohibited NVVM directory is present\n' >&2
+    exit 1
+fi
+
+if find -L /usr/local/cuda -iname '*nvrtc*' -print -quit | grep -q .; then
+    printf 'prohibited NVRTC component is present\n' >&2
+    exit 1
+fi
+
+if find -L /usr/local/cuda -iname '*nvvm*' -print -quit | grep -q .; then
+    printf 'prohibited NVVM component is present\n' >&2
+    exit 1
+fi
+
+python3 -c 'import importlib.util, sys; sys.exit(importlib.util.find_spec("triton") is not None)'
+
+python3 - "$trusted_manifest" <<'PY'
+import hashlib
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+root = Path("/opt/ptx-docs").resolve()
+runtime_manifest_path = root / "manifest.toml"
+trusted_manifest_path = Path(sys.argv[1]).resolve()
+with runtime_manifest_path.open("rb") as stream:
+    runtime_manifest = tomllib.load(stream)
+with trusted_manifest_path.open("rb") as stream:
+    trusted_manifest = tomllib.load(stream)
+
+if runtime_manifest != trusted_manifest:
+    raise SystemExit(
+        "runtime PTX documentation manifest differs from trusted verifier manifest"
+    )
+
+required = ("document_path", "document_version", "source_url", "sha256", "license")
+for field in required:
+    value = trusted_manifest.get(field)
+    if not isinstance(value, str) or not value.strip() or "TODO" in value:
+        raise SystemExit(f"incomplete PTX documentation manifest field: {field}")
+
+document = (root / trusted_manifest["document_path"]).resolve()
+try:
+    document.relative_to(root)
+except ValueError as error:
+    raise SystemExit("PTX documentation path escapes /opt/ptx-docs") from error
+if not document.is_file():
+    raise SystemExit(f"missing pinned PTX documentation: {document}")
+
+expected = trusted_manifest["sha256"]
+if re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+    raise SystemExit("invalid PTX documentation SHA-256 in trusted manifest")
+actual = hashlib.sha256(document.read_bytes()).hexdigest()
+if actual != expected:
+    raise SystemExit(
+        f"PTX documentation SHA-256 mismatch: expected {expected}, got {actual}"
+    )
+PY
+
+printf 'Direct-PTX environment policy check passed\n'

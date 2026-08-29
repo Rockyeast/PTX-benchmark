@@ -1,0 +1,33 @@
+.version 9.2
+.target sm_100
+.address_size 64
+
+// Deliberately wrong: emits 1/4096 for every input distribution.
+.visible .entry softmax_fwd_fp32_n4096(
+    .param .u64 input_ptr,
+    .param .u64 output_ptr,
+    .param .u32 num_rows
+)
+.maxntid 1024, 1, 1
+{
+    .reg .pred %p<2>;
+    .reg .b32 %r<4>;
+    .reg .b64 %rd<6>;
+
+    ld.param.u64 %rd0, [output_ptr];
+    ld.param.u32 %r0, [num_rows];
+    mov.u32 %r1, %ctaid.x;
+    setp.ge.u32 %p0, %r1, %r0;
+    @%p0 bra DONE;
+    mov.u32 %r2, %tid.x;
+    mul.wide.u32 %rd1, %r1, 16384;
+    mul.wide.u32 %rd2, %r2, 4;
+    add.u64 %rd3, %rd0, %rd1;
+    add.u64 %rd4, %rd3, %rd2;
+    st.global.u32 [%rd4], 0x39800000;
+    st.global.u32 [%rd4+4096], 0x39800000;
+    st.global.u32 [%rd4+8192], 0x39800000;
+    st.global.u32 [%rd4+12288], 0x39800000;
+DONE:
+    ret;
+}

@@ -1,0 +1,6 @@
+schema_version = "1.0"
+document_path = "README.md"
+document_version = "PTX ISA 9.2 source record for BF16 Flash Attention feasibility"
+source_url = "https://docs.nvidia.com/cuda/archive/13.2.1/pdf/ptx_isa_9.2.pdf"
+sha256 = "d40e999d643477762a71216fe4a0b6a16e58b3558774da1116f0939e75d44ad8"
+license = "Repository-authored source record; NVIDIA PTX ISA PDF is not redistributed"

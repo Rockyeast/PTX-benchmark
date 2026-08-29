@@ -1,0 +1,6 @@
+schema_version = "1.0"
+document_path = "README.md"
+document_version = "PTX ISA 9.2 source record for fixed KDA recurrent decode feasibility"
+source_url = "https://docs.nvidia.com/cuda/archive/13.2.1/pdf/ptx_isa_9.2.pdf"
+sha256 = "9366e99f6ab02b249e047b380cd8112241895053c1dddeb4628e888d22766214"
+license = "Repository-authored source record; NVIDIA PTX ISA PDF is not redistributed"

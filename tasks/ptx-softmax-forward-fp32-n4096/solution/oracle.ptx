@@ -1,0 +1,118 @@
+.version 9.2
+.target sm_100
+.address_size 64
+
+// Auditable correctness Oracle for row-wise FP32 softmax with N=4096.
+// One 1024-thread block processes one row; each thread owns four elements.
+.visible .entry softmax_fwd_fp32_n4096(
+    .param .u64 input_ptr,
+    .param .u64 output_ptr,
+    .param .u32 num_rows
+)
+.maxntid 1024, 1, 1
+{
+    .reg .pred %p<4>;
+    .reg .b32 %r<9>;
+    .reg .b64 %rd<14>;
+    .reg .f32 %f<24>;
+    .shared .align 4 .b8 scratch[4096];
+
+    ld.param.u64 %rd0, [input_ptr];
+    ld.param.u64 %rd1, [output_ptr];
+    ld.param.u32 %r0, [num_rows];
+
+    mov.u32 %r1, %ctaid.x;
+    setp.ge.u32 %p0, %r1, %r0;
+    @%p0 bra DONE;
+
+    mov.u32 %r2, %tid.x;
+    mul.wide.u32 %rd2, %r1, 16384;
+    add.u64 %rd3, %rd0, %rd2;
+    add.u64 %rd4, %rd1, %rd2;
+    mul.wide.u32 %rd5, %r2, 4;
+    add.u64 %rd6, %rd3, %rd5;
+    add.u64 %rd7, %rd4, %rd5;
+
+    ld.global.f32 %f0, [%rd6];
+    ld.global.f32 %f1, [%rd6+4096];
+    ld.global.f32 %f2, [%rd6+8192];
+    ld.global.f32 %f3, [%rd6+12288];
+
+    max.f32 %f4, %f0, %f1;
+    max.f32 %f5, %f2, %f3;
+    max.f32 %f6, %f4, %f5;
+
+    mov.u64 %rd8, scratch;
+    add.u64 %rd9, %rd8, %rd5;
+    st.shared.f32 [%rd9], %f6;
+    bar.sync 0;
+
+    mov.u32 %r3, 512;
+MAX_REDUCE:
+    setp.ge.u32 %p1, %r2, %r3;
+    @%p1 bra MAX_SKIP;
+    add.u32 %r4, %r2, %r3;
+    mul.wide.u32 %rd10, %r4, 4;
+    add.u64 %rd11, %rd8, %rd10;
+    ld.shared.f32 %f7, [%rd9];
+    ld.shared.f32 %f8, [%rd11];
+    max.f32 %f9, %f7, %f8;
+    st.shared.f32 [%rd9], %f9;
+MAX_SKIP:
+    bar.sync 0;
+    shr.u32 %r3, %r3, 1;
+    setp.ne.u32 %p2, %r3, 0;
+    @%p2 bra MAX_REDUCE;
+
+    ld.shared.f32 %f10, [%rd8];
+    sub.f32 %f11, %f0, %f10;
+    sub.f32 %f12, %f1, %f10;
+    sub.f32 %f13, %f2, %f10;
+    sub.f32 %f14, %f3, %f10;
+    mul.f32 %f11, %f11, 0f3FB8AA3B;
+    mul.f32 %f12, %f12, 0f3FB8AA3B;
+    mul.f32 %f13, %f13, 0f3FB8AA3B;
+    mul.f32 %f14, %f14, 0f3FB8AA3B;
+    ex2.approx.f32 %f15, %f11;
+    ex2.approx.f32 %f16, %f12;
+    ex2.approx.f32 %f17, %f13;
+    ex2.approx.f32 %f18, %f14;
+
+    add.f32 %f19, %f15, %f16;
+    add.f32 %f20, %f17, %f18;
+    add.f32 %f21, %f19, %f20;
+    st.shared.f32 [%rd9], %f21;
+    bar.sync 0;
+
+    mov.u32 %r3, 512;
+SUM_REDUCE:
+    setp.ge.u32 %p1, %r2, %r3;
+    @%p1 bra SUM_SKIP;
+    add.u32 %r4, %r2, %r3;
+    mul.wide.u32 %rd10, %r4, 4;
+    add.u64 %rd11, %rd8, %rd10;
+    ld.shared.f32 %f7, [%rd9];
+    ld.shared.f32 %f8, [%rd11];
+    add.f32 %f9, %f7, %f8;
+    st.shared.f32 [%rd9], %f9;
+SUM_SKIP:
+    bar.sync 0;
+    shr.u32 %r3, %r3, 1;
+    setp.ne.u32 %p2, %r3, 0;
+    @%p2 bra SUM_REDUCE;
+
+    ld.shared.f32 %f22, [%rd8];
+    div.rn.f32 %f23, 0f3F800000, %f22;
+    mul.f32 %f15, %f15, %f23;
+    mul.f32 %f16, %f16, %f23;
+    mul.f32 %f17, %f17, %f23;
+    mul.f32 %f18, %f18, %f23;
+
+    st.global.f32 [%rd7], %f15;
+    st.global.f32 [%rd7+4096], %f16;
+    st.global.f32 [%rd7+8192], %f17;
+    st.global.f32 [%rd7+12288], %f18;
+
+DONE:
+    ret;
+}

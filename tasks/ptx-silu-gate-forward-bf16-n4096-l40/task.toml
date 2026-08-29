@@ -1,0 +1,56 @@
+schema_version = "1.4"
+artifacts = [
+  { source = "/app/kernel.ptx", destination = "kernel.ptx" },
+]
+
+[task]
+name = "ptx-bench/ptx-silu-gate-forward-bf16-n4096-l40"
+version = "1.0.0"
+description = "Implement fused BF16 silu(gate) * up with output width N=4096 on NVIDIA L40 using direct PTX."
+authors = []
+keywords = ["ptx", "cuda", "l40", "sm-89", "silu-gate", "calibration", "direct-ptx"]
+
+[metadata]
+benchmark_setting = "direct-ptx"
+template_version = "direct-ptx-v0.2"
+calibration_only = true
+hardware_target = "NVIDIA L40 (sm_89)"
+ptx_docs_path = "/opt/ptx-docs"
+ptx_validation_tools = ["ptxas", "cuobjdump"]
+documentation_tools = []
+prohibited_high_level_toolchains = ["nvcc", "NVRTC", "NVVM", "Triton"]
+required_gpus = 1
+required_gpu_type = "L40"
+implementation_status = "implemented"
+release_ready = false
+
+[verifier]
+timeout_sec = 180.0
+collect = []
+
+[verifier.env]
+
+[agent]
+timeout_sec = 600.0
+network_mode = "allowlist"
+allowed_hosts = ["10.100.0.1"]
+
+[environment]
+# Trusted environment setup may fetch pinned, hash-verified artifacts. Harbor
+# applies the stricter phase override above while the untrusted Agent runs.
+network_mode = "public"
+build_timeout_sec = 900.0
+os = "linux"
+mcp_servers = []
+
+[environment.healthcheck]
+command = "/usr/local/bin/direct-ptx-policy-check && /usr/local/bin/direct-ptx-verify-hardware --output /logs/environment/hardware-preflight.json"
+interval_sec = 1.0
+timeout_sec = 30.0
+start_period_sec = 0.0
+start_interval_sec = 1.0
+retries = 1
+
+[environment.env]
+
+[solution.env]

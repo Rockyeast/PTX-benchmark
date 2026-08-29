@@ -1,0 +1,6 @@
+schema_version = "1.0"
+document_path = "README.md"
+document_version = "PTX ISA 9.2 source record for paged prefill attention"
+source_url = "https://docs.nvidia.com/cuda/archive/13.2.1/pdf/ptx_isa_9.2.pdf"
+sha256 = "cfb4b7427bbb38e4831e92fbeb68fd85d75f518d26953f37df1ef245d363ceb6"
+license = "Repository-authored source record; NVIDIA PTX ISA PDF is not redistributed"

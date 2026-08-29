@@ -1,0 +1,51 @@
+#!/bin/bash
+
+set -uo pipefail
+
+mkdir -p /logs/verifier
+printf '{"reward":0,"correctness":0,"performance":0,"speedup_vs_reference":0}\n' \
+    > /logs/verifier/reward.json
+
+# An invalid benchmark environment is infrastructure failure, not a Candidate
+# failure. Do not silently turn a leaked compiler or missing PTX tool into a
+# model score of zero.
+if ! /tests/direct-ptx-policy-check \
+    --trusted-manifest /tests/ptx-docs-manifest.toml \
+    > /logs/verifier/environment-policy.log 2>&1; then
+    printf 'Direct-PTX environment policy check failed\n' >&2
+    exit 1
+fi
+
+if ! python3 /tests/verify_hardware.py \
+    --output /logs/verifier/hardware.json; then
+    printf 'Direct-PTX hardware validation failed\n' >&2
+    exit 1
+fi
+
+# Preserve assembler diagnostics for rejected Candidate submissions. Module
+# loading below remains the authoritative runtime check.
+ptxas -arch=sm_100 -v -o /tmp/candidate.cubin /app/kernel.ptx \
+    > /logs/verifier/ptxas.txt 2>&1 || true
+
+python3 /tests/verify_and_benchmark.py \
+    --candidate /app/kernel.ptx \
+    --reference /tests/reference.ptx \
+    --log /logs/verifier/metrics.json \
+    --reward /logs/verifier/reward.json
+status=$?
+
+case "$status" in
+    0)
+        exit 0
+        ;;
+    1)
+        printf 'Direct-PTX Candidate rejected\n' >&2
+        # Harbor reads reward.json. A rejected Candidate is a scored zero, not
+        # a verifier infrastructure exception.
+        exit 0
+        ;;
+    *)
+        printf 'Direct-PTX verifier infrastructure failure (status %s)\n' "$status" >&2
+        exit "$status"
+        ;;
+esac

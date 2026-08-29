@@ -1,0 +1,6 @@
+schema_version = "1.0"
+document_path = "README.md"
+document_version = "PTX ISA 9.2 source record for BF16 Flash Attention backward"
+source_url = "https://docs.nvidia.com/cuda/archive/13.2.1/pdf/ptx_isa_9.2.pdf"
+sha256 = "abdf91bc079cac6b0eea438af84a673e22feb9cfbee81730eee84670a6c87fdb"
+license = "Repository-authored source record; NVIDIA PTX ISA PDF is not redistributed"

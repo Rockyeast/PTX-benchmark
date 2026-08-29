@@ -1,0 +1,58 @@
+schema_version = "1.4"
+artifacts = [
+  { source = "/app/kernel.ptx", destination = "kernel.ptx" },
+]
+
+[task]
+name = "ptx-bench/ptx-kda-dispatch-bf16-t1-t6-h16-hv32-d128"
+version = "1.0.0"
+description = "Implement one B200 direct-PTX module containing fixed T1 recurrent and T6 speculative KDA decode entries."
+authors = []
+keywords = ["ptx", "cuda", "b200", "direct-ptx", "kda", "multi-entry"]
+
+[metadata]
+benchmark_setting = "direct-ptx"
+documentation_access = "online-docs"
+task_format = "multi-entry-system"
+required_entries = [
+  "kda_recurrent_decode_t1_h16_hv32_d128_n32",
+  "flash_kda_decode_sm100a_t6_split1",
+]
+template_version = "direct-ptx-v0.3"
+hardware_target = "NVIDIA B200 / sm_100a"
+ptx_docs_path = "/opt/ptx-docs"
+ptx_validation_tools = ["ptxas", "cuobjdump"]
+documentation_tools = ["web-search"]
+prohibited_high_level_toolchains = ["nvcc", "NVRTC", "NVVM", "Triton"]
+required_gpus = 1
+required_gpu_type = "B200"
+implementation_status = "implemented"
+release_ready = false
+
+[verifier]
+timeout_sec = 1200.0
+collect = []
+
+[verifier.env]
+
+[agent]
+timeout_sec = 6000.0
+network_mode = "no-network"
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 900.0
+os = "linux"
+mcp_servers = []
+
+[environment.healthcheck]
+command = "/usr/local/bin/direct-ptx-policy-check && /usr/local/bin/direct-ptx-verify-hardware --output /logs/environment/hardware-preflight.json"
+interval_sec = 1.0
+timeout_sec = 30.0
+start_period_sec = 0.0
+start_interval_sec = 1.0
+retries = 1
+
+[environment.env]
+
+[solution.env]

@@ -24,7 +24,7 @@ collect = []
 [agent]
 timeout_sec = 600.0
 network_mode = "allowlist"
-allowed_hosts = ["lovelace.ece.local.cmu.edu"]
+allowed_hosts = ["10.100.0.1"]
 
 [environment]
 network_mode = "public"

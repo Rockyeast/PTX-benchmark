@@ -1,0 +1,6 @@
+schema_version = "1.0"
+document_path = "README.md"
+document_version = "PTX ISA 9.2 source record for paged GQA decode feasibility"
+source_url = "https://docs.nvidia.com/cuda/archive/13.2.1/pdf/ptx_isa_9.2.pdf"
+sha256 = "6557e67956a39aefbaea47ab86327a00f77a2c4a81d8c74028537713e9a70c63"
+license = "Repository-authored source record; NVIDIA PTX ISA PDF is not redistributed"

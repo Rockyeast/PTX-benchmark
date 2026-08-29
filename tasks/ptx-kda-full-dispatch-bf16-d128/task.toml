@@ -1,0 +1,65 @@
+schema_version = "1.4"
+artifacts = [
+  { source = "/app/kernel.ptx", destination = "kernel.ptx" },
+]
+
+[task]
+name = "ptx-bench/ptx-kda-full-dispatch-bf16-d128"
+version = "1.0.0"
+description = "Implement the complete seven-entry, 30-shape B200 KDA recurrent-decode family in one direct-PTX module."
+authors = []
+keywords = ["ptx", "b200", "direct-ptx", "kda", "full-dispatch", "multi-entry"]
+
+[metadata]
+benchmark_setting = "direct-ptx"
+documentation_access = "online-docs"
+task_format = "multi-entry-system-correctness"
+required_entries = [
+  "flash_kda_decode_sm100a_t1_split16",
+  "flash_kda_decode_sm100a_t1_split8",
+  "flash_kda_decode_sm100a_t2_split4",
+  "flash_kda_decode_sm100a_t3_split4",
+  "flash_kda_decode_sm100a_t4_split2",
+  "flash_kda_decode_sm100a_t5_split1",
+  "flash_kda_decode_sm100a_t6_split1",
+]
+supported_shape_count = 30
+template_version = "direct-ptx-v0.3"
+hardware_target = "NVIDIA B200 / sm_100a"
+ptx_docs_path = "/opt/ptx-docs"
+ptx_validation_tools = ["ptxas", "cuobjdump"]
+documentation_tools = ["web-search"]
+prohibited_high_level_toolchains = ["nvcc", "NVRTC", "NVVM", "Triton"]
+required_gpus = 1
+required_gpu_type = "B200"
+upstream = "Int21-AI/KDA-B200@4896cd2da4ca421829907ab9fd3550e3f84a141b"
+implementation_status = "in-progress"
+release_ready = false
+
+[verifier]
+timeout_sec = 1800.0
+collect = []
+
+[verifier.env]
+
+[agent]
+timeout_sec = 7200.0
+network_mode = "no-network"
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 900.0
+os = "linux"
+mcp_servers = []
+
+[environment.healthcheck]
+command = "/usr/local/bin/direct-ptx-policy-check && /usr/local/bin/direct-ptx-verify-hardware --output /logs/environment/hardware-preflight.json"
+interval_sec = 1.0
+timeout_sec = 30.0
+start_period_sec = 0.0
+start_interval_sec = 1.0
+retries = 1
+
+[environment.env]
+
+[solution.env]

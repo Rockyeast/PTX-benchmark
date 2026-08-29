@@ -1,1 +1,0 @@
-# ptx-bench/harbor-smoke

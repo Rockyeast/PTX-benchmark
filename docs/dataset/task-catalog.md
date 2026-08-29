@@ -1,81 +1,81 @@
 # PTX-Benchmark 题目目录
 
-**状态：Draft v0.2（2026-08-21）。候选题不等于已经进入正式数据集。**
+**状态：Draft v0.6（2026-08-28）。当前均为开发任务，尚无 frozen release task。**
 
-## 1. 状态说明
+- 每题规格与验证档案：[`../tasks/README.md`](../tasks/README.md)
+- 跨任务实验汇总：[`../experiments/summary.md`](../experiments/summary.md)
+- 开发数据集 manifest：[`../../tasks/dataset.toml`](../../tasks/dataset.toml)
+
+本文件只维护全局题目索引、状态和候选池，不记录单次实验过程。
+
+## 状态
 
 | 状态 | 含义 |
 |---|---|
-| infrastructure | 只验证 Harbor/GPU，不计入 benchmark |
-| calibration | 校准 correctness/performance 管线，不计入最终总分 |
-| selected | 已选入 pilot，但尚未写规格 |
-| specified | 规格、ABI 和测试边界已有草案，但尚未在目标 GPU 跑通 |
-| feasibility | ABI 和最小 Oracle 已在目标 GPU 跑通 |
-| validated | 正负例、Reference 和重复测量完成 |
-| calibrated | 多个真实 Agent/模型已运行 |
-| frozen | 可进入 release manifest |
+| `infrastructure` | 只验证 Harbor、Agent 或 GPU 链路 |
+| `calibration` | 校准 correctness/performance 管线，不计正式总分 |
+| `selected` | 已选入候选，但尚未完成规格 |
+| `specified` | operation、ABI 和测试边界已有草案 |
+| `feasibility` | 最小作者标准提交已在目标 GPU 跑通 |
+| `validated` | 正负例、真值和评分流程完成 |
+| `calibrated` | 已运行真实 Agent；必须注明模型与配置 |
+| `frozen` | task digest、环境、评分和发布证据均冻结 |
 
-## 2. 已有任务
+## Infrastructure and calibration
 
-| Task | 家族/难度 | 当前状态 | 是否在 dev manifest | 是否可进 release |
-|---|---|---|---:|---:|
-| `harbor-smoke` | infrastructure | 已完成 | 否 | 否 |
-| `ptx-add-one` | infrastructure | 已完成 | 否 | 否 |
-| `ptx-vector-add` | C0 calibration | calibrated | 是 | 否 |
-| `ptx-rmsnorm-forward-bf16-n4096` | A / D2 | feasibility | 是 | 暂不 |
+| Task | 类型 | 状态 | Release |
+|---|---|---|---:|
+| `harbor-smoke` | Harbor smoke | `infrastructure` | 否 |
+| `ptx-add-one` | Direct-PTX correctness smoke | `infrastructure` | 否 |
+| `ptx-add-one-l40` | L40/Qwen smoke | `calibration` | 否 |
+| `ptx-vector-add` | 基础性能链路 | `calibration` | 否 |
+| `ptx-vector-add-l40` | L40 性能链路 | `calibration` | 否 |
+| `ptx-silu-gate-forward-bf16-n4096-l40` | L40 硬件迁移 | `calibration` | 否 |
 
-RMSNorm 是第一道正式题候选，但仍缺 INT21 外部性能对照、负例和多 Agent 校准。
+## Pilot tasks
 
-## 3. 第一批十道 pilot 候选
+| ID | Task | 家族/结构 | 当前状态 | 关键结论 |
+|---:|---|---|---|---|
+| P1 | `ptx-rmsnorm-forward-bf16-n4096` | A / single-entry | `feasibility` | 缺 INT21/SOTA 性能锚点和 Agent 校准 |
+| P2 | `ptx-rope-forward-bf16-d128` | C / single-entry | `feasibility` | Oracle 与安全负例已验证 |
+| P3 | `ptx-silu-gate-forward-bf16-n4096` | B / single-entry | `calibrated` | Codex 5/5，容易锚点 |
+| P4 | `ptx-softmax-forward-fp32-n4096` | A / single-entry | `calibrated` | Codex 5/5；性能 Reference 待替换 |
+| P5 | `ptx-kv-cache-append-bf16-d128` | C / selected | `selected` | 尚未 scaffold |
+| P6 | `ptx-fp8-rowwise-quant-e4m3` | D / selected | `selected` | shape 尚未冻结 |
+| P7 | `ptx-moe-top2-routing-bf16-e128` | F / selected | `selected` | correctness 与稳定排序待规格化 |
+| P8 | `ptx-gemm-bf16-fixed` | D / selected | `selected` | SOTA、Baseline 和 shape 待冻结 |
+| P9 | `ptx-flash-attention-forward-bf16-s128-d128` | E / single-entry | `calibrated` | Codex 5/5；Reference 偏弱 |
+| P10 | `ptx-paged-decode-attention-bf16-hq32-hkv8-d128-p16` | E / single-entry | `calibrated` | Codex correctness 5/5；Reference 偏弱 |
+| P11 | `ptx-kda-recurrent-decode-bf16-t1-h16-hv32-d128-n32` | E / single-entry | `calibrated` | Codex 3/3，偏容易 |
+| P12 | `ptx-kda-speculative-decode-bf16-t6-n8-h16-hv32-d128` | E / single-entry | `calibrated` | Codex 3/3；性能存在差异 |
+| P13 | `ptx-kda-dispatch-bf16-t1-t6-h16-hv32-d128` | E / multi-entry | `calibrated` | Codex 3/3；联合性能 reward 有差异 |
+| P14 | `ptx-flash-attention-backward-bf16-s128-d128` | E / single-entry | `calibrated` | Codex 2/2；Reference 明显偏弱 |
+| P15 | `ptx-block-sparse-attention-forward-bf16-s1024-d128-b16` | E / single-entry | `calibrated` | Codex 3/3；Reference 偏弱 |
+| P16 | `ptx-paged-prefill-attention-bf16-q128-hq8-hkv2-d128-p16` | E / single-entry | `calibrated` | Codex 3/3；Reference 偏弱 |
+| P17 | `ptx-gemm-rowwise-fp8e4m3-m128-n128-k128` | D / single-entry | `calibrated` | Codex 3/3；Reference 偏弱 |
+| P18 | `ptx-kda-full-dispatch-bf16-d128` | E / multi-entry | `calibrated` | Codex 3/5；当前 correctness upper probe |
+| P19 | `ptx-paged-sparse-attention-backward-bf16-q128-hq8-hkv2-d128-p16` | E / multi-entry | `validated` | correctness-only；Agent 尚未校准 |
 
-第一版先用 10 道题形成较稳定的正确率分母。当前临时难度目标是：在统一的
-`GPT-5.6 Sol + Codex + reasoning_effort=high` 配置下，整组 task 的 correctness
-通过率约为 30%～50%。这是选题假设，不是已经得到的实验结论；正式冻结仍要运行
-Kimi K3、GLM 等开放权重模型。
+当前任务中，只有 P18 对 GPT-5.6/Codex/high 形成明显 correctness 区分；该结果不能替代开放权重模型校准。多数性能题仍使用 task-owned 弱 Reference，不能冻结正式性能排名。
 
-| 顺序 | 暂定 Task | 专门化边界 | 家族/难度 | 正确性真值 | 性能来源候选 | 状态 |
-|---:|---|---|---|---|---|---|
-| P1 | `rmsnorm-forward-bf16-n4096` | plain forward，BF16，FP32 weight，N=4096 | A / D2 | 独立 CPU/PyTorch 公式 | INT21 RMSNorm-B200 | feasibility |
-| P2 | `rope-forward-bf16-d128` | NeoX RoPE，BF16，head_dim=128，Q/K 融合 | C / D2 | 独立 CPU/Python FP32/BF16 公式 | FlashInfer RoPE | feasibility |
-| P3 | `silu-gate-forward-bf16-n4096` | `silu(gate) * up`，BF16，N=4096 | B / D1 | 独立 CPU/PyTorch 公式 | FlashInfer fused activation | selected |
-| P4 | `softmax-forward-bf16-n4096` | row-wise forward，BF16，N=4096 | A / D2 | 稳定 FP32 softmax 公式 | FlashInfer / CUDA Reference | selected |
-| P5 | `kv-cache-append-bf16-d128` | paged K/V append，BF16，head_dim=128 | C / D2 | 独立索引与拷贝公式 | FlashInfer paged KV API | selected |
-| P6 | `fp8-rowwise-quant-e4m3` | BF16 → FP8 E4M3 + row scale，shape 待冻结 | D / D2-D3 | 独立量化与反量化规则 | FlashInfer / CUTLASS | selected |
-| P7 | `moe-top2-routing-bf16-e128` | 每 token 选 2 个 expert，E=128 | F / D3 | 独立 stable top-2 + weight 公式 | FlashInfer / serving routing | selected |
-| P8 | `gemm-bf16-fixed` | BF16×BF16→FP32/BF16，固定 B200 shape | D / D3 | 独立 CPU/PyTorch matmul | NVIDIA CUTLASS Blackwell GEMM | selected |
-| P9 | `flash-attention-forward-bf16-d128` | causal forward，BF16，head_dim=128 | E / D4 | 独立 FP32 attention 公式 | FlashInfer / FlashAttention | selected |
-| P10 | `paged-decode-attention-bf16-d128` | GQA decode，paged KV，BF16，head_dim=128 | E / D4 | 独立 FP32 attention + page gather | FlashInfer / CUTLASS GQA | selected |
+## Candidate pool
 
-家族数量为 `A:2, B:1, C:2, D:2, E:2, F:1`。P3 提供相对容易但仍有融合和特殊函数
-意义的锚点；P8～P10 则故意保留 Tensor Core、online softmax 和 paged metadata 等
-高难能力。预期分布必须由真实 Agent 重复运行验证，不能只凭 D1～D4 标签认定。
-
-## 4. 第二批候选池
-
-这些题只进入候选池，尚未选入 pilot：
-
-| 候选 | 家族 | 主要价值 | 当前阻塞/注意点 |
+| 候选 | 家族 | 主要价值 | 主要前置条件 |
 |---|---|---|---|
-| LayerNorm forward/backward | A | reduction、均值与方差 | 与 RMSNorm 重复度要控制 |
-| FP8 / NVFP4 GEMM | D | Blackwell 低精度 Tensor Core | scale 格式、TMA descriptor 和 Reference 较复杂 |
-| KDA recurrent decode | E | 现代 state-space/attention hybrid | 官方 B200 实现有 host dispatch 和七条 kernel 路径，不适合直接塞进当前单-entry格式 |
-| grouped GEMM / fused MoE | F | expert routing 与不规则工作量 | 需要 workspace 和多输出契约 |
-| Top-K / Top-P sampling | F | 非规则选择与概率语义 | 随机性、确定性和统计正确性需单独设计 |
+| LayerNorm forward/backward | A | reduction、均值与方差 | 控制与 RMSNorm 的重复度 |
+| FP8/NVFP4 GEMM | D | Blackwell Tensor Core | 固定 scale 格式、Baseline 和开源 SOTA |
+| General multi-shape GEMM | D | 隐藏多 shape 通用性 | 固定统一 entry/ABI 和 SOTA shape regime |
+| Grouped GEMM/fused MoE | F | expert routing、不规则 workload | 固定 workspace、输出和真实 Baseline |
+| Top-K/Top-P sampling | F | 非规则选择与概率语义 | 设计确定性与统计正确性 |
+| General multi-shape attention | E | 防止单 shape 过拟合 | 复用开源 SOTA 的接口和 shape regime |
 
-## 5. 上游覆盖依据
+## Selection rule
 
-- INT21 目前公开的第一组实现覆盖 RMSNorm 与 Kimi Delta Attention，并分别有 H100、
-  B200 版本；这提供两类 workload，不是一套可直接转成任意 PTX task 的答案库。
-- FlashInfer 官方覆盖 attention、BF16/FP8/FP4 GEMM、MoE、sampling、RoPE、normalization
-  和 fused activation，适合作为候选题来源与外部实现对照。
-- FlashInfer-Bench 提供真实部署 kernel/workload 数据集，可用于后续选择 shape；它的
-  proposal/workflow 系统与 Harbor task 不是同一层，不直接替换当前 verifier。
-- CUTLASS 官方覆盖 Blackwell BF16、FP8、NVFP4/MXFP 等 GEMM，可作为线性代数题的
-  NVIDIA 性能基线；使用 architecture-accelerated 指令时需要明确 `sm_100a` 边界。
+正式 performance task 应优先从真实开源 SOTA 反推 operation、dtype/layout、shape regime 和 ABI，并同时具备：
 
-## 6. 下一步
+1. 独立 correctness truth；
+2. 现实、可复现的性能 Baseline；
+3. 固定 revision、许可证和构建记录的 SOTA 性能满分线；
+4. 隐藏多 shape、负例和目标模型校准。
 
-P2 RoPE 已完成 B200 Oracle feasibility 和两个安全负例检查。下一步为 P3 SiLU-gate
-做来源审阅和规格草案，暂不同时 scaffold P4～P10；同时保留 P1 RMSNorm、P2 RoPE 的
-剩余负例、重复计时和 Agent 校准。等前三道正式候选暴露出共同的 ABI、Reference 和
-verifier 问题后，再冻结模板并继续扩展。
+没有合格 SOTA 的任务只能保留为 correctness、infrastructure 或 feasibility task。

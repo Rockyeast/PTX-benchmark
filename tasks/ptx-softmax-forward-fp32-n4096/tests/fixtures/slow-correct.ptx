@@ -1,0 +1,80 @@
+.version 9.2
+.target sm_100
+.address_size 64
+
+// Correct but deliberately serial: only thread 0 processes its row.
+.visible .entry softmax_fwd_fp32_n4096(
+    .param .u64 input_ptr,
+    .param .u64 output_ptr,
+    .param .u32 num_rows
+)
+.maxntid 1024, 1, 1
+{
+    .reg .pred %p<4>;
+    .reg .b32 %r<6>;
+    .reg .b64 %rd<10>;
+    .reg .f32 %f<8>;
+
+    ld.param.u64 %rd0, [input_ptr];
+    ld.param.u64 %rd1, [output_ptr];
+    ld.param.u32 %r0, [num_rows];
+    mov.u32 %r1, %ctaid.x;
+    setp.ge.u32 %p0, %r1, %r0;
+    @%p0 bra DONE;
+    mov.u32 %r2, %tid.x;
+    setp.ne.u32 %p1, %r2, 0;
+    @%p1 bra DONE;
+
+    mul.wide.u32 %rd2, %r1, 16384;
+    add.u64 %rd3, %rd0, %rd2;
+    add.u64 %rd4, %rd1, %rd2;
+
+    ld.global.f32 %f0, [%rd3];
+    mov.u32 %r3, 1;
+MAX_LOOP:
+    setp.ge.u32 %p2, %r3, 4096;
+    @%p2 bra MAX_DONE;
+    mul.wide.u32 %rd5, %r3, 4;
+    add.u64 %rd6, %rd3, %rd5;
+    ld.global.f32 %f1, [%rd6];
+    max.f32 %f0, %f0, %f1;
+    add.u32 %r3, %r3, 1;
+    bra MAX_LOOP;
+
+MAX_DONE:
+    mov.f32 %f2, 0f00000000;
+    mov.u32 %r3, 0;
+SUM_LOOP:
+    setp.ge.u32 %p2, %r3, 4096;
+    @%p2 bra SUM_DONE;
+    mul.wide.u32 %rd5, %r3, 4;
+    add.u64 %rd6, %rd3, %rd5;
+    ld.global.f32 %f1, [%rd6];
+    sub.f32 %f3, %f1, %f0;
+    mul.f32 %f3, %f3, 0f3FB8AA3B;
+    ex2.approx.f32 %f4, %f3;
+    add.f32 %f2, %f2, %f4;
+    add.u32 %r3, %r3, 1;
+    bra SUM_LOOP;
+
+SUM_DONE:
+    div.rn.f32 %f5, 0f3F800000, %f2;
+    mov.u32 %r3, 0;
+STORE_LOOP:
+    setp.ge.u32 %p2, %r3, 4096;
+    @%p2 bra DONE;
+    mul.wide.u32 %rd5, %r3, 4;
+    add.u64 %rd6, %rd3, %rd5;
+    add.u64 %rd7, %rd4, %rd5;
+    ld.global.f32 %f1, [%rd6];
+    sub.f32 %f3, %f1, %f0;
+    mul.f32 %f3, %f3, 0f3FB8AA3B;
+    ex2.approx.f32 %f4, %f3;
+    mul.f32 %f6, %f4, %f5;
+    st.global.f32 [%rd7], %f6;
+    add.u32 %r3, %r3, 1;
+    bra STORE_LOOP;
+
+DONE:
+    ret;
+}
