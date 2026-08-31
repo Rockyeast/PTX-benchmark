@@ -1,0 +1,224 @@
+diff --git a/src/harbor/trial/trial.py b/src/harbor/trial/trial.py
+index 0106467..7233e5f 100644
+--- a/src/harbor/trial/trial.py
++++ b/src/harbor/trial/trial.py
+@@ -3,6 +3,7 @@ import asyncio
+ import contextlib
+ import hashlib
+ import logging
++import tempfile
+ import traceback
+ from abc import ABC, abstractmethod
+ from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+@@ -71,6 +72,28 @@ TrialHookCallback = Callable[[TrialHookEvent], Awaitable[None]]
+ _MAX_VERIFIER_ENV_SESSION_ID_LEN = 63
+ 
+ 
++def _instruction_mirror_paths(
++    task_os: TaskOS,
++) -> tuple[PurePosixPath, PurePosixPath]:
++    """Return the agent-visible directory and file for the task instruction."""
++    if task_os == TaskOS.WINDOWS:
++        instruction_dir = PurePosixPath("C:/task")
++    else:
++        instruction_dir = PurePosixPath("/opt/task")
++    return instruction_dir, instruction_dir / "instruction.md"
++
++
++def _instruction_with_mirror_notice(instruction: str, mirror_path: str) -> str:
++    """Tell the agent where Harbor mirrored the effective task instruction."""
++    return (
++        f"{instruction.rstrip()}\n\n"
++        "<harbor_runtime>\n"
++        "Harbor mirrored the exact effective task instruction at "
++        f"`{mirror_path}`. You may reread that file at any time.\n"
++        "</harbor_runtime>\n"
++    )
++
++
+ class Trial(ABC):
+     """Base trial lifecycle.
+ 
+@@ -442,6 +465,54 @@ class Trial(ABC):
+         )
+         return min(base_sec, max_sec or float("inf")) * resolved_multiplier
+ 
++    async def _mirror_agent_instruction(self, instruction: str) -> str:
++        """Upload the effective instruction into the agent environment.
++
++        Harbor still passes the instruction as the agent's initial prompt. This
++        mirror is a convenience copy for long-running agents that need to reread
++        the original contract after substantial tool output or context compaction.
++        """
++        task_os = self.task.config.environment.os
++        instruction_dir, instruction_path = _instruction_mirror_paths(task_os)
++
++        prepare_result = await self.agent_environment.empty_dirs(
++            [instruction_dir],
++            chmod=True,
++        )
++        if prepare_result is not None and prepare_result.return_code != 0:
++            output = prepare_result.stderr or prepare_result.stdout or "no output"
++            raise RuntimeError(
++                "Failed to prepare the agent instruction directory "
++                f"{instruction_dir}: {output}"
++            )
++
++        with tempfile.TemporaryDirectory(prefix="harbor-instruction-") as temp_dir:
++            source_path = Path(temp_dir) / "instruction.md"
++            source_path.write_text(instruction, encoding="utf-8")
++            await self.agent_environment.upload_file(
++                source_path=source_path,
++                target_path=instruction_path.as_posix(),
++            )
++
++        if task_os != TaskOS.WINDOWS:
++            quoted_dir = quote_shell_arg(instruction_dir, task_os)
++            quoted_path = quote_shell_arg(instruction_path, task_os)
++            permission_result = await self.agent_environment.exec(
++                f"chmod 0555 {quoted_dir} && chmod 0444 {quoted_path}",
++                user="root",
++            )
++            if permission_result.return_code != 0:
++                output = (
++                    permission_result.stderr
++                    or permission_result.stdout
++                    or "no output"
++                )
++                raise RuntimeError(
++                    f"Failed to make {instruction_path} read-only: {output}"
++                )
++
++        return instruction_path.as_posix()
++
+     async def _run_agent_phase(
+         self,
+         *,
+@@ -459,6 +530,15 @@ class Trial(ABC):
+         target.agent_execution = TimingInfo(started_at=self._now())
+ 
+         try:
++            instruction_path = await self._mirror_agent_instruction(instruction)
++            agent_instruction = _instruction_with_mirror_notice(
++                instruction,
++                instruction_path,
++            )
++            agent_env = {
++                **self.agent.extra_env,
++                "HARBOR_INSTRUCTION_PATH": instruction_path,
++            }
+             plan = self._network_plan(step_cfg)
+             step_name = step_cfg.name if step_cfg is not None else None
+             with self.agent_environment.with_default_user(user):
+@@ -467,7 +547,7 @@ class Trial(ABC):
+                     baseline_policy=plan.agent_env_baseline,
+                     phase_policy=plan.agent_phase,
+                 ):
+-                    with self.agent_environment.scoped_exec_env(self.agent.extra_env):
++                    with self.agent_environment.scoped_exec_env(agent_env):
+                         with self._log_context(
+                             "agent", self.agent_environment, step_name
+                         ):
+@@ -479,7 +559,7 @@ class Trial(ABC):
+                                 run = self.agent.run
+                             await asyncio.wait_for(
+                                 run(
+-                                    instruction=instruction,
++                                    instruction=agent_instruction,
+                                     environment=self.agent_environment,
+                                     context=target.agent_result,
+                                 ),
+diff --git a/tests/unit/trial/test_instruction_mirror.py b/tests/unit/trial/test_instruction_mirror.py
+new file mode 100644
+index 0000000..18d362d
+--- /dev/null
++++ b/tests/unit/trial/test_instruction_mirror.py
+@@ -0,0 +1,88 @@
++from pathlib import Path
++from types import SimpleNamespace
++
++import pytest
++
++from harbor.environments.base import ExecResult
++from harbor.models.task.config import TaskOS
++from harbor.trial.trial import (
++    Trial,
++    _instruction_mirror_paths,
++    _instruction_with_mirror_notice,
++)
++
++
++class _MirrorTrial(Trial):
++    async def _run(self) -> None:
++        pass
++
++    async def _recover_outputs(self) -> None:
++        pass
++
++
++class _FakeEnvironment:
++    def __init__(self) -> None:
++        self.empty_dirs_args = None
++        self.upload_target = None
++        self.uploaded_text = None
++        self.exec_args = None
++
++    async def empty_dirs(self, dirs, *, chmod=True):
++        self.empty_dirs_args = (dirs, chmod)
++        return ExecResult(stdout="", stderr="", return_code=0)
++
++    async def upload_file(self, source_path, target_path):
++        self.upload_target = target_path
++        self.uploaded_text = Path(source_path).read_text(encoding="utf-8")
++
++    async def exec(self, command, *, user=None):
++        self.exec_args = (command, user)
++        return ExecResult(stdout="", stderr="", return_code=0)
++
++
++def test_linux_instruction_mirror_path_is_outside_ptx_docs() -> None:
++    directory, path = _instruction_mirror_paths(TaskOS.LINUX)
++
++    assert directory.as_posix() == "/opt/task"
++    assert path.as_posix() == "/opt/task/instruction.md"
++
++
++def test_windows_instruction_mirror_path_is_drive_qualified() -> None:
++    directory, path = _instruction_mirror_paths(TaskOS.WINDOWS)
++
++    assert directory.as_posix() == "C:/task"
++    assert path.as_posix() == "C:/task/instruction.md"
++
++
++def test_mirror_notice_preserves_instruction_and_discloses_path() -> None:
++    instruction = "Implement the requested kernel.\n"
++
++    rendered = _instruction_with_mirror_notice(
++        instruction,
++        "/opt/task/instruction.md",
++    )
++
++    assert rendered.startswith("Implement the requested kernel.\n")
++    assert "`/opt/task/instruction.md`" in rendered
++    assert "reread that file at any time" in rendered
++
++
++@pytest.mark.asyncio
++async def test_mirror_uploads_exact_instruction_and_makes_it_read_only() -> None:
++    trial = object.__new__(_MirrorTrial)
++    environment = _FakeEnvironment()
++    trial.agent_environment = environment
++    trial.task = SimpleNamespace(
++        config=SimpleNamespace(environment=SimpleNamespace(os=TaskOS.LINUX))
++    )
++
++    path = await trial._mirror_agent_instruction("Exact task text.\n")
++
++    assert path == "/opt/task/instruction.md"
++    assert environment.upload_target == path
++    assert environment.uploaded_text == "Exact task text.\n"
++    assert environment.empty_dirs_args == ([Path("/opt/task")], True)
++    assert environment.exec_args == (
++        "chmod 0555 /opt/task && chmod 0444 /opt/task/instruction.md",
++        "root",
++    )

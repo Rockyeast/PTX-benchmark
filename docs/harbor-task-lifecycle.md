@@ -64,13 +64,21 @@ Harbor 源码路径：
     └── instruction=self.task.instruction
 ```
 
-对于本次 Codex Agent，指令不是把 `instruction.md` 文件挂进容器，而是作为 `codex exec` 的最后一个命令行参数传入。真实证据在：
+默认 Harbor 中，指令不是把 `instruction.md` 文件挂进容器，而是作为 `codex exec`
+的最后一个命令行参数传入。真实证据在：
 
 ```text
 jobs/harbor-smoke-codex/harbor-smoke__Ukp94kC/trial.log
 ```
 
 该日志完整显示了 `codex exec ... -- '# Create the output file ...'`，同时 stdin 被重定向为 `/dev/null`。
+
+本项目维护的 Harbor 分支
+`Rockyeast/harbor:ptx-benchmark/harbor-0.21` 在这个默认行为上增加了一个可重读镜像：
+Harbor 将同一 Agent phase 的有效 instruction 写入
+`/opt/task/instruction.md`，设置 `HARBOR_INSTRUCTION_PATH`，并继续把 instruction 文本
+作为 prompt 传给 Agent。镜像不替代 prompt，也不属于 `/opt/ptx-docs`。仓库中的
+`patches/harbor/0006-agent-instruction-mirror.patch` 只作为离线恢复副本。
 
 ## 2. Agent 启动时能看到哪些目录和文件？
 
@@ -79,6 +87,8 @@ jobs/harbor-smoke-codex/harbor-smoke__Ukp94kC/trial.log
 ```text
 /
 ├── app/                    # Task 工作目录；Agent 在这里创建 answer.txt
+├── opt/task/
+│   └── instruction.md      # PTX Harbor 分支提供的有效 instruction 只读镜像
 ├── logs/
 │   ├── agent/             # Agent 日志挂载目录
 │   ├── verifier/          # Verifier 日志挂载目录

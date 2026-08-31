@@ -1,6 +1,6 @@
 # Harbor CLI 安装与检查记录
 
-检查日期：2026-08-18
+首次检查日期：2026-08-18；定制分支核验日期：2026-08-31
 
 ## 安装结果
 
@@ -8,7 +8,24 @@
 - Harbor：`0.21.0`
 - 安装位置：`/home/rockyeast/PTX-benchmark/.venv`
 - CLI 路径：`/home/rockyeast/PTX-benchmark/.venv/bin/harbor`
-- 安装方式：在仓库本地 Python virtual environment 中执行 `pip install harbor`
+- 当前安装来源：`Rockyeast/harbor` 的 `ptx-benchmark/harbor-0.21` 分支，
+  commit `8527f653aa866bd56ee5f96d2e93a0ff72dee01a`
+
+当前仍显示版本 `0.21.0`，因为定制分支以官方 `v0.21.0` 为底座，并没有伪造新的
+Harbor 发布版本。精确来源可通过以下命令核对：
+
+```bash
+python -c "from importlib.metadata import distribution; print(distribution('harbor').read_text('direct_url.json'))"
+```
+
+重新安装当前固定 commit：
+
+```bash
+.venv/bin/pip install --no-deps --force-reinstall \
+  'git+https://github.com/Rockyeast/harbor.git@8527f653aa866bd56ee5f96d2e93a0ff72dee01a'
+```
+
+分支和历史补丁状态见 [`../../patches/harbor/README.md`](../../patches/harbor/README.md)。
 
 使用前先激活环境：
 
